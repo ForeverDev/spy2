@@ -14,6 +14,7 @@ struct SpyType {
 	char* type_name;
 	unsigned int plevel; /* depth of pointer */
 	unsigned int size; /* number of bytes needed to store */
+	uint16_t modifier;
 };
 
 struct BinaryOp {
@@ -33,6 +34,12 @@ struct ExpNode {
 	 * number literals, datatypes (e.g. cast) and variables
 	 */
 	ExpNode* parent;
+	/* side tells whether the node is on the left side or
+	 * the right side of the parent binary operator..
+	 *	1 = left
+	 *	2 = right 
+	 */
+	unsigned int side;
 	enum ExpNodeType {
 		NODE_BINOP,
 		NODE_UNOP,
@@ -50,9 +57,9 @@ struct ExpNode {
 		spy_float fval;
 		spy_string sval; 
 		char* idval;
-		SpyType tval; /* datatype (e.g. cast, template) */
-		UnaryOp uval;
-		BinaryOp bval;
+		SpyType* tval; /* datatype (e.g. cast, template) */
+		UnaryOp* uval;
+		BinaryOp* bval;
 	};
 };
 
