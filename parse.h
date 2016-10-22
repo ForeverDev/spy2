@@ -7,14 +7,22 @@
 typedef struct ParseState ParseState;
 typedef struct ExpNode ExpNode;
 typedef struct SpyType SpyType;
+typedef struct SpyTypeList SpyTypeList;
 typedef struct BinaryOp BinaryOp;
 typedef struct UnaryOp UnaryOp;
+typedef struct TypeCast TypeCast;
 
 struct SpyType {
 	char* type_name;
 	unsigned int plevel; /* depth of pointer */
 	unsigned int size; /* number of bytes needed to store */
 	uint16_t modifier;
+};
+
+struct SpyTypeList {
+	SpyType* datatype;
+	SpyTypeList* next;
+	SpyTypeList* prev;
 };
 
 struct BinaryOp {
@@ -25,6 +33,11 @@ struct BinaryOp {
 
 struct UnaryOp {
 	TokenType type;
+	ExpNode* operand;
+};
+
+struct TypeCast {
+	SpyType* datatype;
 	ExpNode* operand;
 };
 
@@ -60,11 +73,13 @@ struct ExpNode {
 		SpyType* tval; /* datatype (e.g. cast, template) */
 		UnaryOp* uval;
 		BinaryOp* bval;
+		TypeCast* cval;
 	};
 };
 
 struct ParseState {
 	Token* token;
+	SpyTypeList* defined_types;
 };
 
 ParseState* generate_tree(Token*);

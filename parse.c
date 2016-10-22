@@ -16,16 +16,21 @@ typedef struct OperatorInfo OperatorInfo;
 
 static SpyType* parse_datatype(ParseState*);
 static ExpNode* expression_to_tree(ParseState*);
-static int simplify_tree(ParseState*, ExpNode*);
+static void simplify_tree(ParseState*, ExpNode*);
 static void print_expression_tree(ExpNode*, int);
 static Token* token(ParseState*);
 static int on(ParseState*, int, ...);
 static void next(ParseState*, int);
+static void register_datatype(ParseState*, SpyType*);
+static SpyType* get_datatype(ParseState*, const char*);
+static int matches_datatype(ParseState*);
 
 static void expstack_push(ExpStack*, ExpNode*);
 static void expstack_print(ExpStack*);
 static ExpNode* expstack_pop(ExpStack*);
 static ExpNode* expstack_top(ExpStack*);
+
+static void parse_error(ParseState*, const char*, ...); 
 
 struct OperatorInfo {
 	unsigned int pres;
@@ -33,6 +38,10 @@ struct OperatorInfo {
 		ASSOC_LEFT = 1,
 		ASSOC_RIGHT = 2
 	} assoc;
+	enum OperatorType {
+		OP_UNARY = 1,
+		OP_BINARY = 2
+	} optype;
 };
 
 /* only used to generate a postfix representation
@@ -46,6 +55,17 @@ struct ExpStack {
 static const char* modifiers[] = {
 	"static", "const", "volatile"
 };
+
+static void
+parse_error(ParseState* P, const char* format, ...) {
+	va_list list;
+	va_start(list, format);
+	printf("\n\n***SPYRE COMPILE-TIME ERROR***\n\n");
+	printf("\tmessage: ");
+	vprintf(format, list);
+	printf("\n\tline: %d\n\n", P->token->line);
+	va_end(list);
+}
 	
 static void
 expstack_push(ExpStack* stack, ExpNode* node) {
@@ -154,6 +174,31 @@ next(ParseState* P, int increase) {
 }
 
 static void
+register_datatype(ParseState* P, SpyType* type) {
+	if (!P->defined_types->datatype) {
+		P->defined_types->datatype = type;
+		return;
+	}
+	SpyTypeList* list;
+	for (list = P->defined_types; list->next; list = list->next);
+	SpyTypeList* new = malloc(sizeof(SpyTypeList));
+	new->datatype = type;
+	new->next = NULL;
+	new->prev = list;
+	list->next = new;
+}
+
+static SpyType*
+get_datatype(ParseState* P, const char* type_name) {
+	for (SpyTypeList* i = P->defined_types; i && i->datatype; i = i->next) {
+		if (!strcmp(i->datatype->type_name, type_name)) {
+			return i->datatype;
+		}
+	}
+	return NULL;
+}
+
+static void
 print_datatype(SpyType* type) {
 	printf("(");
 	for (int i = 0; i < 3; i++) {
@@ -199,6 +244,17 @@ print_expression_tree(ExpNode* tree, int indent) {
 	}
 }
 
+/* tells whether or not the parser is looking at a datatype */
+static int
+matches_datatype(ParseState* P) {
+	for (int i = 0; i < 3; i++) {
+		if (!strcmp(modifiers[i], P->token->word)) {
+			return 1;
+		}
+	}
+	return get_datatype(P, P->token->word) != NULL;
+}
+
 /*
  * <typename> ::= <identifier>
  * <datatype> ::= <modifier>* <typename> "^"*
@@ -232,6 +288,10 @@ parse_datatype(ParseState* P) {
 	/* on typename */
 	type->type_name = malloc(strlen(P->token->word) + 1);
 	strcpy(type->type_name, P->token->word);
+	/* make sure it's a type */
+	if (!get_datatype(P, type->type_name)) {
+		parse_error(P, "unknown type name '%s'", type->type_name);
+	}
 	P->token = P->token->next;
 
 	/* on pointer? */
@@ -246,23 +306,19 @@ parse_datatype(ParseState* P) {
 
 /* optimizes a tree to get rid of trivial arithmetic, e.g.
  * 5 + 10 + x can be condensed to 15 + x */
-static int
+static void
 simplify_tree(ParseState* P, ExpNode* tree) {
-	int did_simplify = 0;
+	ExpNode* new = NULL;
 	switch (tree->type) {
 		case NODE_BINOP: {
 			ExpNode* left = tree->bval->left;
 			ExpNode* right = tree->bval->right;
 			/* break if it can't be condensed */
-			if (left->type == NODE_BINOP) {
-				did_simplify = simplify_tree(P, left);
+			if (left->type == NODE_BINOP || left->type == NODE_UNOP) {
+				simplify_tree(P, left);
 			}
-			if (right->type == NODE_BINOP) {
-				if (!did_simplify) {
-					did_simplify = simplify_tree(P, right);
-				} else {
-					simplify_tree(P, right);
-				}
+			if (right->type == NODE_BINOP || right->type == NODE_UNOP) {
+				simplify_tree(P, right);
 			}
 			if (left->type != NODE_INTEGER && left->type != NODE_FLOAT) {
 				break;
@@ -270,10 +326,8 @@ simplify_tree(ParseState* P, ExpNode* tree) {
 			if (right->type != NODE_INTEGER && right->type != NODE_FLOAT) {
 				break;
 			}	
-			/* it can be condensed... */
-			did_simplify = 1;
 			/* TODO typecheck */
-			ExpNode* new = malloc(sizeof(ExpNode));
+			new = malloc(sizeof(ExpNode));
 			new->type = left->type;
 			/* condense integer arithmetic */
 			if (new->type == NODE_INTEGER) {
@@ -296,26 +350,59 @@ simplify_tree(ParseState* P, ExpNode* tree) {
 					case TOK_SHR:
 						new->ival = left->ival >> right->ival;
 						break;
+
 				}
 			/* condense float arithmetic */
 			} else {
 
 			}
-			if (tree->parent) {
-				/* remove tree and append new */
-				if (tree->side == LEAF_LEFT) {
-					/* LEFT SIDE */
-					tree->parent->bval->left = new;
-				} else {
-					/* RIGHT SIDE */
-					tree->parent->bval->right = new;
-				}
-			} else {
-				memcpy(tree, new, sizeof(ExpNode));
+			break;
+		}
+		case NODE_UNOP: {
+			ExpNode* operand = tree->uval->operand;
+			if (operand->type == NODE_BINOP || operand->type == NODE_UNOP) {
+				simplify_tree(P, operand);
 			}
+			if (operand->type != NODE_INTEGER && operand->type != NODE_FLOAT) {
+				break;
+			}
+			
+			new = malloc(sizeof(ExpNode));
+			new->type = operand->type;
+			
+			if (operand->type == NODE_INTEGER) {
+				switch (tree->uval->type) {
+					case TOK_EXCL:
+						new->ival = operand->ival == 0;
+						break;
+				}
+			/* floating point arithmetic */
+			} else {
+
+			}
+			/* no need to create a new node like we do for binary operator
+			 * evaluation... just change the operand accordingly */
+			 break;
 		}
 	}
-	return did_simplify;
+	if (!new) return;
+	if (tree->parent) {
+		/* remove tree and append new */
+		if (tree->parent->type == NODE_BINOP) {
+			if (tree->side == LEAF_LEFT) {
+				/* LEFT SIDE */
+				tree->parent->bval->left = new;
+			} else {
+				/* RIGHT SIDE */
+				tree->parent->bval->right = new;
+			}
+		} else {
+			tree->parent->uval->operand = new;
+		}
+		//new->parent = tree;
+	} else {
+		memcpy(tree, new, sizeof(ExpNode));
+	}
 }
 
 static ExpNode* 
@@ -324,43 +411,48 @@ expression_to_tree(ParseState* P) {
 	ExpStack* operators = calloc(1, sizeof(ExpStack));
 
 	static const OperatorInfo opinfo[256] = {
-		[TOK_COMMA]			= {1, ASSOC_LEFT},
-		[TOK_ASSIGN]		= {2, ASSOC_RIGHT},
-		[TOK_LOGAND]		= {3, ASSOC_LEFT},
-		[TOK_LOGOR]			= {3, ASSOC_LEFT},
-		[TOK_EQ]			= {4, ASSOC_LEFT},
-		[TOK_NOTEQ]			= {4, ASSOC_LEFT},
-		[TOK_GT]			= {6, ASSOC_LEFT},
-		[TOK_GE]			= {6, ASSOC_LEFT},
-		[TOK_LT]			= {6, ASSOC_LEFT},
-		[TOK_LE]			= {6, ASSOC_LEFT},
-		[TOK_LINE]			= {7, ASSOC_LEFT},
-		[TOK_SHL]			= {7, ASSOC_LEFT},
-		[TOK_SHR]			= {7, ASSOC_LEFT},
-		[TOK_PLUS]			= {8, ASSOC_LEFT},
-		[TOK_HYPHON]		= {8, ASSOC_LEFT},
-		[TOK_ASTER]			= {9, ASSOC_LEFT},
-		[TOK_PERCENT]		= {9, ASSOC_LEFT},
-		[TOK_FORSLASH]		= {9, ASSOC_LEFT},
-		[TOK_AMPERSAND]		= {10, ASSOC_RIGHT},
-		[TOK_UPCARROT]		= {10, ASSOC_RIGHT},
-		[TOK_EXCL]			= {10, ASSOC_RIGHT},
-		[TOK_PERIOD]		= {11, ASSOC_LEFT}
+		[TOK_COMMA]			= {1, ASSOC_LEFT, OP_BINARY},
+		[TOK_ASSIGN]		= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_LOGAND]		= {3, ASSOC_LEFT, OP_BINARY},
+		[TOK_LOGOR]			= {3, ASSOC_LEFT, OP_BINARY},
+		[TOK_EQ]			= {4, ASSOC_LEFT, OP_BINARY},
+		[TOK_NOTEQ]			= {4, ASSOC_LEFT, OP_BINARY},
+		[TOK_GT]			= {6, ASSOC_LEFT, OP_BINARY},
+		[TOK_GE]			= {6, ASSOC_LEFT, OP_BINARY},
+		[TOK_LT]			= {6, ASSOC_LEFT, OP_BINARY},
+		[TOK_LE]			= {6, ASSOC_LEFT, OP_BINARY},
+		[TOK_LINE]			= {7, ASSOC_LEFT, OP_BINARY},
+		[TOK_SHL]			= {7, ASSOC_LEFT, OP_BINARY},
+		[TOK_SHR]			= {7, ASSOC_LEFT, OP_BINARY},
+		[TOK_PLUS]			= {8, ASSOC_LEFT, OP_BINARY},
+		[TOK_HYPHON]		= {8, ASSOC_LEFT, OP_BINARY},
+		[TOK_ASTER]			= {9, ASSOC_LEFT, OP_BINARY},
+		[TOK_PERCENT]		= {9, ASSOC_LEFT, OP_BINARY},
+		[TOK_FORSLASH]		= {9, ASSOC_LEFT, OP_BINARY},
+		[TOK_AMPERSAND]		= {10, ASSOC_RIGHT, OP_UNARY},
+		[TOK_UPCARROT]		= {10, ASSOC_RIGHT, OP_UNARY},
+		[TOK_EXCL]			= {10, ASSOC_RIGHT, OP_UNARY},
+		[TOK_PERIOD]		= {11, ASSOC_LEFT, OP_BINARY}
 	};
 
 	for (; token(P); next(P, 1)) {
 		/* use assoc to see if it exists */
-		if (!strcmp(P->token->word, "const") 
-			|| !strcmp(P->token->word, "volatile")
-			|| !strcmp(P->token->word, "static")
-		) {
+		if (matches_datatype(P)) {
 			ExpNode* push = malloc(sizeof(ExpNode));
 			push->parent = NULL;
 			push->type = NODE_DATATYPE;
 			push->tval = parse_datatype(P);	
-			P->token = P->token->prev;
+			if (P->token) {
+				P->token = P->token->prev;
+			}
 			expstack_push(postfix, push);
 		} else if (token(P)->type == TOK_OPENPAR) {
+			P->token = P->token->next;
+			if (matches_datatype(P)) {
+				/* check if cast */
+			} else {
+				P->token = P->token->prev;
+			}
 			ExpNode* push = malloc(sizeof(ExpNode));
 			push->parent = NULL;
 			push->type = NODE_UNOP; /* just consider an open parenthesis as a unary operator */
@@ -405,11 +497,17 @@ expression_to_tree(ParseState* P) {
 			}
 			ExpNode* push = malloc(sizeof(ExpNode));
 			push->parent = NULL;
-			push->type = NODE_BINOP;
-			push->bval = malloc(sizeof(BinaryOp));
-			push->bval->type = P->token->type;
-			push->bval->left = NULL;
-			push->bval->right = NULL;
+			push->type = opinfo[P->token->type].optype == OP_UNARY ? NODE_UNOP : NODE_BINOP;
+			if (push->type == NODE_BINOP) {
+				push->bval = malloc(sizeof(BinaryOp));
+				push->bval->type = P->token->type;
+				push->bval->left = NULL;
+				push->bval->right = NULL;
+			} else {
+				push->uval = malloc(sizeof(UnaryOp));
+				push->uval->type = P->token->type;
+				push->uval->operand = NULL;
+			}
 			expstack_push(operators, push);
 		} else if (
 			P->token->type == TOK_INT ||
@@ -484,10 +582,20 @@ expression_to_tree(ParseState* P) {
 			node->bval->right = leaf[0];
 			/* throw the branch back onto the stack */
 			expstack_push(tree, node);
+		} else if (node->type == NODE_UNOP) {
+			ExpNode* operand = expstack_pop(tree);
+			operand->parent = node;
+			node->uval->operand = operand;
+			expstack_push(tree, node);
 		}
 	}
 	
-	while (simplify_tree(P, tree->node));
+	/* TODO
+	 * this is bad, make it so it only loops until
+	 * no further simplifications need to be made */	
+	for (int i = 0; i < 10; i++) {	
+		simplify_tree(P, tree->node);
+	}
 
 	print_expression_tree(tree->node, 0);
 	
@@ -500,6 +608,33 @@ ParseState*
 generate_tree(Token* tokens) {
 	ParseState* P = malloc(sizeof(ParseState));
 	P->token = tokens;
+	P->defined_types = malloc(sizeof(SpyTypeList));
+	P->defined_types->next = NULL;
+	P->defined_types->prev = NULL;
+	P->defined_types->datatype = NULL;
+	
+	/* establish primitive types */
+	SpyType* type_int = malloc(sizeof(SpyType));
+	type_int->type_name = "int";
+	type_int->plevel = 0;
+	type_int->size = 8;
+	type_int->modifier = 0;
+
+	SpyType* type_float = malloc(sizeof(SpyType));
+	type_float->type_name = "float";
+	type_float->plevel = 0;
+	type_float->size = 8;
+	type_float->modifier = 0;
+
+	SpyType* type_byte = malloc(sizeof(SpyType));
+	type_byte->type_name = "byte";
+	type_byte->plevel = 0;
+	type_byte->size = 1;
+	type_byte->modifier = 0;
+	
+	register_datatype(P, type_int);
+	register_datatype(P, type_float);
+	register_datatype(P, type_byte);
 	
 	while (token(P)) {
 		expression_to_tree(P);
