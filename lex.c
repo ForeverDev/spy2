@@ -47,14 +47,17 @@ append_token(Token* head, char* word, unsigned int line, TokenType type) {
 	}
 }
 
-Token*
+LexState*
 generate_tokens(const char* filename) {
-
-	Token* tokens = malloc(sizeof(Token));	
-	tokens->next = NULL;
-	tokens->type = 0; /* empty */
-	tokens->line = 0;
-	tokens->word = NULL;
+	
+	LexState* lexer = malloc(sizeof(LexState));
+	lexer->filename = filename;
+	lexer->total_lines = 0;
+	lexer->tokens = malloc(sizeof(Token));
+	lexer->tokens->next = NULL;
+	lexer->tokens->type = 0; /* empty */
+	lexer->tokens->line = 0;
+	lexer->tokens->word = NULL;
 
 	FILE* handle;
 	char* contents;
@@ -99,7 +102,7 @@ generate_tokens(const char* filename) {
 			buf = calloc(1, 4);
 			strcpy(buf, "...");
 			buf[3] = 0;
-			append_token(tokens, buf, line, TOK_DOTS);
+			append_token(lexer->tokens, buf, line, TOK_DOTS);
 		} else if (isalpha(*contents) || *contents == '_' || *contents == '"') {
 			int is_string = 0;
 			if (*contents == '"') {
@@ -124,7 +127,7 @@ generate_tokens(const char* filename) {
 				buf[i] = start[i];
 			}
 			buf[len] = 0;
-			append_token(tokens, buf, line, (
+			append_token(lexer->tokens, buf, line, (
 				is_string ? TOK_STRING : 
 				!strcmp(buf, "if") ? TOK_IF : 
 				!strcmp(buf, "else") ? TOK_ELSE : 
@@ -155,7 +158,7 @@ generate_tokens(const char* filename) {
 			buf = calloc(1, len + 1);
 			strncpy(buf, start, len);
 			buf[len] = 0;
-			append_token(tokens, buf, line, is_float ? TOK_FLOAT : TOK_INT);
+			append_token(lexer->tokens, buf, line, is_float ? TOK_FLOAT : TOK_INT);
 		} else if (ispunct(*contents)) {
 			/* replace with strcmp? */
 			#define CHECK2(str) (*contents == str[0] && contents[1] == str[1])
@@ -201,10 +204,12 @@ generate_tokens(const char* filename) {
 			buf = malloc(len + 1);
 			strncpy(buf, start, len);
 			buf[len] = 0;
-			append_token(tokens, buf, line, type);
+			append_token(lexer->tokens, buf, line, type);
 		}
 	}
 
-	return tokens;
+	lexer->total_lines = line - 1;
+
+	return lexer;
 
 }

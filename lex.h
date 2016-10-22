@@ -1,11 +1,12 @@
 #ifndef LEX_H
 #define LEX_H
 
-typedef struct Lexer Lexer;
+typedef struct LexState LexState;
 typedef struct Token Token;
 typedef enum TokenType TokenType;
 
 enum TokenType {
+	TOK_NULL = 0,
 	TOK_IF = 1,
 	TOK_ELSE = 2,
 	TOK_WHILE = 3,
@@ -94,7 +95,13 @@ struct Token {
 	Token*			prev;
 };
 
-Token* generate_tokens(const char*);
+struct LexState {
+	Token* tokens;
+	const char* filename;
+	unsigned int total_lines;
+};
+
+LexState* generate_tokens(const char*);
 void append_token(Token*, char*, unsigned int, unsigned int);
 void print_tokens(Token*);
 char tt_to_word(TokenType);

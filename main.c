@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
 			//Spy_execute(argv[2], SPY_NOFLAG | SPY_STEP | SPY_DEBUG, 1, args);
 			Spy_execute(argv[2], flags, 1, args);
 		} else if (!strncmp(argv[1], "c", 1)) {
-			Token* tokens = generate_tokens(argv[2]);	
+			LexState* tokens = generate_tokens(argv[2]);	
 			ParseState* tree = generate_tree(tokens);
 		}
 	} else {

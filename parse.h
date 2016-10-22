@@ -11,6 +11,12 @@ typedef struct SpyTypeList SpyTypeList;
 typedef struct BinaryOp BinaryOp;
 typedef struct UnaryOp UnaryOp;
 typedef struct TypeCast TypeCast;
+typedef struct TreeNode TreeNode;
+typedef struct TreeBlock TreeBlock;
+typedef struct TreeStatement TreeStatement;
+typedef struct TreeIf TreeIf;
+typedef struct TreeWhile TreeWhile;
+typedef struct TreeFor TreeFor;
 
 struct SpyType {
 	char* type_name;
@@ -41,6 +47,21 @@ struct TypeCast {
 	ExpNode* operand;
 };
 
+struct TreeNode {
+	enum TreeNodeType {
+		NODE_IF,
+		NODE_FOR,
+		NODE_WHILE,
+		NODE_STATEMENT
+	} type;
+	union {
+		TreeIf* ifval;
+		TreeFor* forval;
+		TreeWhile* whileval;
+		TreeStatement* stateval;
+	};
+};
+
 struct ExpNode {
 	/* only acceptable things in an expression are
 	 * binary operators, unary operators, string literals,
@@ -54,16 +75,17 @@ struct ExpNode {
 	 */
 	unsigned int side;
 	enum ExpNodeType {
-		NODE_BINOP,
-		NODE_UNOP,
-		NODE_OPENPAR,  /* only used for shunting yard */
-		NODE_CLOSEPAR, /* only used for shunting yard */
-		NODE_STRING,
-		NODE_INTEGER,
-		NODE_FLOAT,
-		NODE_DATATYPE,
-		NODE_LOCAL,
-		NODE_IDENTIFIER
+		EXP_BINOP,
+		EXP_UNOP,
+		EXP_OPENPAR,  /* only used for shunting yard */
+		EXP_CLOSEPAR, /* only used for shunting yard */
+		EXP_STRING,
+		EXP_INTEGER,
+		EXP_FLOAT,
+		EXP_DATATYPE,
+		EXP_LOCAL,
+		EXP_IDENTIFIER,
+		EXP_CAST
 	} type;
 	union {
 		spy_integer ival;
@@ -78,10 +100,13 @@ struct ExpNode {
 };
 
 struct ParseState {
+	const char* filename;
+	unsigned int total_lines;
 	Token* token;
+	Token* end_mark; /* marks the end of an expression */ 
 	SpyTypeList* defined_types;
 };
 
-ParseState* generate_tree(Token*);
+ParseState* generate_tree(LexState*);
 
 #endif
