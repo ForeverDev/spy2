@@ -5,6 +5,7 @@
 #include "lex.h"
 	
 typedef struct ParseState ParseState;
+typedef struct ParseOptions ParseOptions;
 typedef struct ExpNode ExpNode;
 typedef struct SpyType SpyType;
 typedef struct SpyTypeList SpyTypeList;
@@ -17,6 +18,15 @@ typedef struct TreeStatement TreeStatement;
 typedef struct TreeIf TreeIf;
 typedef struct TreeWhile TreeWhile;
 typedef struct TreeFor TreeFor;
+typedef enum TreeNodeType TreeNodeType;
+
+enum TreeNodeType {
+	NODE_IF,
+	NODE_FOR,
+	NODE_WHILE,
+	NODE_STATEMENT,
+	NODE_BLOCK
+};
 
 struct SpyType {
 	char* type_name;
@@ -31,35 +41,54 @@ struct SpyTypeList {
 	SpyTypeList* prev;
 };
 
+/* expresstion structs */
 struct BinaryOp {
 	TokenType type;
 	ExpNode* left;
 	ExpNode* right;	
 };
-
 struct UnaryOp {
 	TokenType type;
 	ExpNode* operand;
 };
-
 struct TypeCast {
 	SpyType* datatype;
 	ExpNode* operand;
 };
 
+struct TreeIf {
+	ExpNode* condition;
+	TreeNode* child;
+};
+
+struct TreeWhile {
+	ExpNode* condition;
+	TreeNode* child;
+};
+
+struct TreeFor {
+	ExpNode* initializer;
+	ExpNode* condition;
+	ExpNode* statement;
+	TreeNode* child;
+};
+
+struct TreeBlock {
+	TreeNode* child;
+};
+
 struct TreeNode {
-	enum TreeNodeType {
-		NODE_IF,
-		NODE_FOR,
-		NODE_WHILE,
-		NODE_STATEMENT
-	} type;
+	TreeNodeType type;
 	union {
 		TreeIf* ifval;
 		TreeFor* forval;
 		TreeWhile* whileval;
-		TreeStatement* stateval;
+		ExpNode* stateval;
+		TreeBlock* blockval;
 	};
+	TreeNode* next;
+	TreeNode* prev;
+	TreeNode* parent;
 };
 
 struct ExpNode {
@@ -99,14 +128,27 @@ struct ExpNode {
 	};
 };
 
+struct ParseOptions {
+	enum ParseOptimizationLevel {
+		OPT_ZERO = 0,	/* no optimization */
+		OPT_ONE = 1,	/* optimize trivial arithmetic */
+		OPT_TWO = 2,	/* optimize branching */
+		OPT_THREE = 3	/* TBD */
+	} opt_level;
+};
+
 struct ParseState {
 	const char* filename;
 	unsigned int total_lines;
 	Token* token;
 	Token* end_mark; /* marks the end of an expression */ 
 	SpyTypeList* defined_types;
+	TreeNode* to_append;
+	TreeNode* current_block;
+	TreeNode* root_block;
+	ParseOptions* options;
 };
 
-ParseState* generate_tree(LexState*);
+ParseState* generate_tree(LexState*, ParseOptions*);
 
 #endif

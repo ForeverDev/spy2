@@ -18,6 +18,7 @@ static SpyType* parse_datatype(ParseState*);
 static ExpNode* expression_to_tree(ParseState*);
 static void simplify_tree(ParseState*, ExpNode*);
 static int simplify_available(ParseState*, ExpNode*);
+static void print_node(TreeNode*, int);
 static void print_expression_tree(ExpNode*, int);
 static Token* token(ParseState*);
 static int on(ParseState*, int, ...);
@@ -28,11 +29,20 @@ static int matches_datatype(ParseState*);
 static void make_sure(ParseState*, TokenType, const char*);
 static void print_datatype(SpyType*);
 static void mark_expression(ParseState*, TokenType, TokenType);
+static TreeNode* new_node(ParseState*, TreeNodeType);
+static void append(ParseState*, TreeNode*);
+static int is_keyword(const char*);
+
+static TreeNode* parse_statement(ParseState*);
+static void parse_if(ParseState*);
+static void parse_while(ParseState*);
+static void parse_for(ParseState*);
 
 static void expstack_push(ExpStack*, ExpNode*);
 static void expstack_print(ExpStack*);
 static ExpNode* expstack_pop(ExpStack*);
 static ExpNode* expstack_top(ExpStack*);
+static char* expstack_tostring(ExpStack*);
 
 static void parse_error(ParseState*, const char*, ...); 
 
@@ -60,15 +70,36 @@ static const char* modifiers[] = {
 	"static", "const", "volatile"
 };
 
+static const char* keywords[32] = {
+	"if", "for", "while", "func", "return",
+	"continue", "break", "cfunc"
+};
+
+/* list of operators that can be optimized */
+static const int optimizable[255] = {
+	[TOK_PLUS] = 1,
+	[TOK_HYPHON] = 1,
+	[TOK_ASTER] = 1,
+	[TOK_FORSLASH] = 1,
+	[TOK_SHL] = 1,
+	[TOK_SHR] = 1,
+	[TOK_GT] = 1,
+	[TOK_LT] = 1,
+	[TOK_GE] = 1,
+	[TOK_LE] = 1,
+	[TOK_EQ] = 1
+};
+
 static void
 parse_error(ParseState* P, const char* format, ...) {
 	va_list list;
 	va_start(list, format);
-	printf("\n\n***SPYRE COMPILE-TIME ERROR***\n\n");
+	printf("\n\n*** SPYRE COMPILE-TIME ERROR ***\n\n");
 	printf("\tmessage: ");
 	vprintf(format, list);
 	/* resort to last line if there is no token */
-	printf("\n\tline: %d\n\n", P->token ? P->token->line : P->total_lines);
+	printf("\n\tline:    %d\n", P->token ? P->token->line : P->total_lines);
+	printf("\tfile:    %s\n\n", P->filename);
 	va_end(list);
 	exit(1);
 }
@@ -78,6 +109,16 @@ make_sure(ParseState* P, TokenType type, const char* err) {
 	if (!P->token || P->token->type != type) {
 		parse_error(P, err);
 	}
+}
+
+static int
+is_keyword(const char* word) {
+	for (const char** i = &keywords[0]; *i; i++) {
+		if (!strcmp(word, *i)) {
+			return 1;
+		}
+	}
+	return 0;
 }
 	
 static void
@@ -124,37 +165,50 @@ expstack_top(ExpStack* stack) {
 	return i->node;
 }
 
+static char*
+expstack_tostring(ExpStack* stack) {
+	ExpNode* node = stack->node;
+	char* buf;
+	if (!node) {
+		buf = malloc(2);
+		strcpy(buf, "?");
+		return buf;
+	}
+	buf = malloc(128); /* 128 _should_ be enough space */
+	switch (node->type) {
+		case EXP_BINOP:
+			sprintf(buf, "%s", tt_to_word(node->bval->type)); 
+			break;
+		case EXP_UNOP:
+			sprintf(buf, "%s", tt_to_word(node->uval->type)); 
+			break;
+		case EXP_STRING:
+			sprintf(buf, "%s", node->sval);
+			break;
+		case EXP_INTEGER:
+			sprintf(buf, "%lld", node->ival);
+			break;
+		case EXP_FLOAT:
+			sprintf(buf, "%lf", node->fval);
+			break;
+		case EXP_IDENTIFIER:
+			sprintf(buf, "%s", node->idval);
+			break;
+		case EXP_CAST:
+			sprintf(buf, " ");
+			break;
+		default:
+			break;
+	}
+	return buf;
+}
+
 static void
 expstack_print(ExpStack* stack) {
 	for (ExpStack* i = stack; i; i = i->next) {
-		ExpNode* node = i->node;
-		if (!node) break;
-		switch (node->type) {
-			case EXP_BINOP:
-				printf("%c", tt_to_word(node->bval->type)); 
-				break;
-			case EXP_UNOP:
-				printf("%c", tt_to_word(node->uval->type)); 
-				break;
-			case EXP_STRING:
-				printf("%s", node->sval);
-				break;
-			case EXP_INTEGER:
-				printf("%lld", node->ival);
-				break;
-			case EXP_FLOAT:
-				printf("%lf", node->fval);
-				break;
-			case EXP_IDENTIFIER:
-				printf("%s", node->idval);
-				break;
-			case EXP_CAST:
-				print_datatype(node->cval->datatype);
-				break;
-			default:
-				break;
-		}
-		printf(" ");
+		char* tostring = expstack_tostring(i);
+		printf("%s ", tostring);
+		free(tostring);
 	}
 	printf("\n");
 }
@@ -198,6 +252,13 @@ mark_expression(ParseState* P, TokenType inc, TokenType dec) {
 			count++;
 		} else if (i->type == dec) {
 			count--;
+		}
+		if (i->type == TOK_CLOSECURL || i->type == TOK_OPENCURL) {
+			P->token = i;
+			parse_error(P, "unexpected token while parsing: '%s'", i->word);
+		} else if (is_keyword(i->word)) {
+			P->token = i;
+			parse_error(P, "unexpected keyword while parsing expression: '%s'", i->word);
 		}
 		/* if the count is 0, mark the token as the end of the expression */
 		if (count == 0) {
@@ -248,19 +309,97 @@ print_datatype(SpyType* type) {
 	printf(")");
 }
 
-#define INDENT(n) for (int _=0; _<(n); _++) printf("\t")
+#define INDENT(n) for (int _=0; _<(n); _++) printf("    ")
+
+static void
+print_node(TreeNode* node, int indent) {
+	if (!node) return;
+	INDENT(indent);
+	switch (node->type) {
+		case NODE_STATEMENT:
+			printf("STATEMENT: [\n");
+			print_expression_tree(node->stateval, indent + 1);	
+			INDENT(indent);
+			printf("]\n");
+			break;
+		case NODE_BLOCK:
+			printf("BLOCK: {\n");
+			for (TreeNode* i = node->blockval->child; i; i = i->next) {
+				print_node(i, indent + 1);
+			}
+			INDENT(indent);
+			printf("}\n");
+			break;
+		case NODE_IF:
+			printf("IF: [\n");
+			INDENT(indent + 1);
+			printf("CONDITION: [\n");
+			print_expression_tree(node->ifval->condition, indent + 2);
+			INDENT(indent + 1);
+			printf("]\n");
+			INDENT(indent + 1);
+			printf("CHILD: [\n");
+			print_node(node->ifval->child, indent + 2);
+			INDENT(indent + 1);
+			printf("]\n");
+			INDENT(indent);
+			printf("]\n");
+			break;
+		case NODE_WHILE:
+			printf("WHILE: [\n");
+			INDENT(indent + 1);
+			printf("CONDITION: [\n");
+			print_expression_tree(node->whileval->condition, indent + 2);
+			INDENT(indent + 1);
+			printf("]\n");
+			INDENT(indent + 1);
+			printf("CHILD: [\n");
+			print_node(node->whileval->child, indent + 2);
+			INDENT(indent + 1);
+			printf("]\n");
+			INDENT(indent);
+			printf("]\n");
+			break;
+		case NODE_FOR:
+			printf("FOR: [\n");
+			INDENT(indent + 1);
+			printf("INITIALIZER: [\n");
+			print_expression_tree(node->forval->initializer, indent + 2);
+			INDENT(indent + 1);
+			printf("]\n");
+			INDENT(indent + 1);
+			printf("CONDITION: [\n");
+			print_expression_tree(node->forval->condition, indent + 2);
+			INDENT(indent + 1);
+			printf("]\n");
+			INDENT(indent + 1);
+			printf("STATEMENT: [\n");
+			print_expression_tree(node->forval->statement, indent + 2);
+			INDENT(indent + 1);
+			printf("]\n");
+			INDENT(indent + 1);
+			printf("CHILD: [\n");
+			print_node(node->forval->child, indent + 2);
+			INDENT(indent + 1);
+			printf("]\n");
+			INDENT(indent);
+			printf("]\n");
+			break;
+	}	
+}
 
 static void
 print_expression_tree(ExpNode* tree, int indent) {
+	if (!tree) return;
 	INDENT(indent);
 	switch (tree->type) {
 		case EXP_BINOP:
-			printf("%c\n", tt_to_word(tree->bval->type));
+			printf("%s\n", tt_to_word(tree->bval->type));
 			print_expression_tree(tree->bval->left, indent + 1);	
 			print_expression_tree(tree->bval->right, indent + 1);	
 			break;
 		case EXP_UNOP:
-			printf("%c\n", tt_to_word(tree->uval->type));
+			printf("%s\n", tt_to_word(tree->uval->type));
 			print_expression_tree(tree->uval->operand, indent + 1);	
 			break;
 		case EXP_INTEGER:
@@ -295,53 +434,63 @@ matches_datatype(ParseState* P) {
 	return get_datatype(P, P->token->word) != NULL;
 }
 
-/*
- * <typename> ::= <identifier>
- * <datatype> ::= <modifier>* <typename> "^"*
- *
- */
-static SpyType*
-parse_datatype(ParseState* P) {
-	SpyType* type = malloc(sizeof(SpyType));
-	type->type_name = NULL;
-	type->plevel = 0;
-	type->size = 0;
-	type->modifier = 0;
+static TreeNode*
+new_node(ParseState* P, TreeNodeType type) {
+	TreeNode* node = malloc(sizeof(TreeNode));
+	switch (type) {
+		case NODE_IF:
+		case NODE_FOR:
+		case NODE_WHILE:
+		case NODE_STATEMENT:
+			node->type = NODE_STATEMENT;
+			node->stateval = NULL; /* to be assigned */
+			break;
+	}
+	return node;
+}
 
-	/* find modifiers */	
-	int found;
-	do {
-		found = 0;
-		for (int i = 0; i < 3; i++) {
-			if (!strcmp(P->token->word, modifiers[i])) {
-				type->modifier |= (
-					i == 0 ? MOD_STATIC :
-					i == 1 ? MOD_CONST : MOD_VOLATILE
-				);
-				found = 1;
-				P->token = P->token->next;
+/* appends a node to whatever is needed... e.g. if
+ * the most recent thing is an if statement, the 
+ * node will be attached to that.  Else, it is
+ * appended into the current block */
+static void
+append(ParseState* P, TreeNode* node) {
+	/* stick it onto the node if it is appendable */
+	if (P->to_append) {
+		switch (P->to_append->type) {
+			case NODE_IF:
+				P->to_append->ifval->child = node;	
 				break;
-			}		
+			case NODE_WHILE:
+				P->to_append->whileval->child = node;
+				break;
+			case NODE_FOR:
+				P->to_append->forval->child = node;
+				break;
 		}
-	} while (found);	
-	
-	/* on typename */
-	type->type_name = malloc(strlen(P->token->word) + 1);
-	strcpy(type->type_name, P->token->word);
-	/* make sure it's a type */
-	if (!get_datatype(P, type->type_name)) {
-		parse_error(P, "unknown type name '%s'", type->type_name);
+		node->parent = P->to_append;
+	/* otherwise just throw it into the current block */
+	} else {
+		TreeBlock* current_block = P->current_block->blockval;
+		if (!current_block->child) {
+			current_block->child = node;
+		} else {
+			TreeNode* tail;
+			for (tail = current_block->child; tail->next; tail = tail->next);
+			tail->next = node;
+			node->prev = tail;
+		}
+		node->parent = P->current_block;
+		node->next = NULL;
 	}
-	P->token = P->token->next;
-
-	/* on pointer? */
-	while (token(P) && P->token->type == TOK_UPCARROT) {
-		type->plevel++;
-		P->token = P->token->next;
+	if (node->type == NODE_IF || node->type == NODE_WHILE || node->type == NODE_FOR) {
+		P->to_append = node;
+	} else {
+		P->to_append = NULL;
+	}	
+	if (node->type == NODE_BLOCK) {
+		P->current_block = node;
 	}
-	
-	return type;
-
 }
 
 static int
@@ -350,6 +499,9 @@ simplify_available(ParseState* P, ExpNode* tree) {
 		case EXP_BINOP: {
 			ExpNode* left = tree->bval->left;
 			ExpNode* right = tree->bval->right;
+			if (!optimizable[tree->bval->type]) {
+				return 0;
+			}
 			if ((left->type == EXP_INTEGER || left->type == EXP_FLOAT)
 				&& (right->type == EXP_INTEGER || right->type == EXP_FLOAT)
 			) {
@@ -365,6 +517,9 @@ simplify_available(ParseState* P, ExpNode* tree) {
 		}
 		case EXP_UNOP: {
 			ExpNode* operand = tree->uval->operand;
+			if (!optimizable[tree->uval->type]) {
+				return 0;
+			}
 			if (operand->type == EXP_INTEGER || operand->type == EXP_FLOAT) {
 				return 1;
 			}
@@ -382,7 +537,9 @@ simplify_available(ParseState* P, ExpNode* tree) {
  * 5 + 10 + x can be condensed to 15 + x */
 static void
 simplify_tree(ParseState* P, ExpNode* tree) {
+
 	ExpNode* new = NULL;
+	if (!tree) return;
 	switch (tree->type) {
 		case EXP_BINOP: {
 			ExpNode* left = tree->bval->left;
@@ -400,6 +557,9 @@ simplify_tree(ParseState* P, ExpNode* tree) {
 			if (right->type != EXP_INTEGER && right->type != EXP_FLOAT) {
 				break;
 			}	
+			if (!optimizable[tree->bval->type]) {
+				return;
+			}
 			/* TODO typecheck */
 			new = malloc(sizeof(ExpNode));
 			new->type = left->type;
@@ -424,6 +584,21 @@ simplify_tree(ParseState* P, ExpNode* tree) {
 					case TOK_SHR:
 						new->ival = left->ival >> right->ival;
 						break;
+					case TOK_GT:
+						new->ival = left->ival > right->ival;
+						break;
+					case TOK_LT:
+						new->ival = left->ival < right->ival;
+						break;
+					case TOK_GE:
+						new->ival = left->ival >= right->ival;
+						break;
+					case TOK_LE:
+						new->ival = left->ival <= right->ival;
+						break;
+					case TOK_EQ:
+						new->ival = left->ival == right->ival;
+						break;
 
 				}
 			/* condense float arithmetic */
@@ -438,6 +613,9 @@ simplify_tree(ParseState* P, ExpNode* tree) {
 				simplify_tree(P, operand);
 			}
 			if (operand->type != EXP_INTEGER && operand->type != EXP_FLOAT) {
+				break;
+			}
+			if (!optimizable[tree->uval->type]) {
 				break;
 			}
 			
@@ -480,12 +658,25 @@ simplify_tree(ParseState* P, ExpNode* tree) {
 
 static ExpNode* 
 expression_to_tree(ParseState* P) {
+
+	if (!P->token || P->token->type == TOK_SEMICOLON) {
+		return NULL;
+	}
+
 	ExpStack* postfix = calloc(1, sizeof(ExpStack));
 	ExpStack* operators = calloc(1, sizeof(ExpStack));
 
 	static const OperatorInfo opinfo[256] = {
 		[TOK_COMMA]			= {1, ASSOC_LEFT, OP_BINARY},
 		[TOK_ASSIGN]		= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_INCBY]			= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_DECBY]			= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_MULBY]			= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_DIVBY]			= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_MODBY]			= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_ANDBY]			= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_ORBY]			= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_XORBY]			= {2, ASSOC_RIGHT, OP_BINARY},
 		[TOK_LOGAND]		= {3, ASSOC_LEFT, OP_BINARY},
 		[TOK_LOGOR]			= {3, ASSOC_LEFT, OP_BINARY},
 		[TOK_EQ]			= {4, ASSOC_LEFT, OP_BINARY},
@@ -510,6 +701,7 @@ expression_to_tree(ParseState* P) {
 	};
 
 	for (; P->token && P->token != P->end_mark; P->token = P->token->next) {
+		if (P->token->type == TOK_SEMICOLON) continue;
 		/* use assoc to see if it exists */
 		if (matches_datatype(P)) {
 			ExpNode* push = malloc(sizeof(ExpNode));
@@ -648,8 +840,6 @@ expression_to_tree(ParseState* P) {
 		expstack_push(postfix, pop);
 	}
 
-	expstack_print(postfix);
-
 	/* now the postfix stack contains the expression
 	 * in reverse-polish notation..... generate a tree */
 
@@ -661,7 +851,9 @@ expression_to_tree(ParseState* P) {
 	tree->node = NULL;
 	tree->next = NULL;
 	tree->prev = NULL;
-	
+
+	static const char* unexpected_token = "malformed expression, token '%s' is missing one or more operands";
+
 	/* iterate through the postfix */
 	for (ExpStack* i = postfix; i; i = i->next) {
 		ExpNode* node = i->node;
@@ -676,12 +868,15 @@ expression_to_tree(ParseState* P) {
 		} else if (node->type == EXP_BINOP) {
 			/* pop the leaves off of the stack */
 			ExpNode* leaf[2];
-			for (int i = 0; i < 2; i++) {
+			for (int j = 0; j < 2; j++) {
 				/* TODO error check for malformed expression,
 				 * also typecheck in the future */
-				leaf[i] = expstack_pop(tree);
-				leaf[i]->parent = node;
-				leaf[i]->side = i == 1 ? LEAF_LEFT : LEAF_RIGHT;
+				leaf[j] = expstack_pop(tree);
+				if (!leaf[j]) {
+					parse_error(P, unexpected_token, expstack_tostring(i));
+				}
+				leaf[j]->parent = node;
+				leaf[j]->side = j == 1 ? LEAF_LEFT : LEAF_RIGHT;
 			}
 			/* swap order */
 			node->bval->left = leaf[1];
@@ -690,6 +885,9 @@ expression_to_tree(ParseState* P) {
 			expstack_push(tree, node);
 		} else if (node->type == EXP_UNOP) {
 			ExpNode* operand = expstack_pop(tree);
+			if (!operand) {
+				parse_error(P, unexpected_token, expstack_tostring(i));
+			}
 			operand->parent = node;
 			node->uval->operand = operand;
 			expstack_push(tree, node);
@@ -701,8 +899,10 @@ expression_to_tree(ParseState* P) {
 		}
 	}
 	
-	while (simplify_available(P, tree->node)) {
-		simplify_tree(P, tree->node);
+	if (P->options->opt_level >= OPT_ONE) {	
+		while (simplify_available(P, tree->node)) {
+			simplify_tree(P, tree->node);
+		}
 	}
 
 	/* there should only be one value in the stack... TODO check this */
@@ -710,13 +910,164 @@ expression_to_tree(ParseState* P) {
 
 }
 
+static void
+jump_out(ParseState* P) {
+	/* on token '}' */
+	P->token = P->token->next;
+	TreeNode* block = P->current_block;
+	if (block == P->root_block) {
+		return;
+	}
+	do {
+		block = block->parent;
+	} while (block && block->type != NODE_BLOCK);
+	if (!block) {
+		parse_error(P, "expected '}' before EOF");
+	}
+	P->current_block = block;
+}
+
+/*
+ * <typename> ::= <identifier>
+ * <datatype> ::= <modifier>* <typename> "^"*
+ *
+ */
+static SpyType*
+parse_datatype(ParseState* P) {
+	SpyType* type = malloc(sizeof(SpyType));
+	type->type_name = NULL;
+	type->plevel = 0;
+	type->size = 0;
+	type->modifier = 0;
+
+	/* find modifiers */	
+	int found;
+	do {
+		found = 0;
+		for (int i = 0; i < 3; i++) {
+			if (!strcmp(P->token->word, modifiers[i])) {
+				type->modifier |= (
+					i == 0 ? MOD_STATIC :
+					i == 1 ? MOD_CONST : MOD_VOLATILE
+				);
+				found = 1;
+				P->token = P->token->next;
+				break;
+			}		
+		}
+	} while (found);	
+	
+	/* on typename */
+	type->type_name = malloc(strlen(P->token->word) + 1);
+	strcpy(type->type_name, P->token->word);
+	/* make sure it's a type */
+	if (!get_datatype(P, type->type_name)) {
+		parse_error(P, "unknown type name '%s'", type->type_name);
+	}
+	P->token = P->token->next;
+
+	/* on pointer? */
+	while (token(P) && P->token->type == TOK_UPCARROT) {
+		type->plevel++;
+		P->token = P->token->next;
+	}
+	
+	return type;
+
+}
+
+/* expects that the end of the statement is already marked */
+static TreeNode*
+parse_statement(ParseState* P) {
+	TreeNode* node = new_node(P, NODE_STATEMENT);
+	node->stateval = expression_to_tree(P);
+	return node;
+}
+
+static void 
+parse_if(ParseState* P) {
+	/* starts on token IF */
+	P->token = P->token->next;
+	make_sure(P, TOK_OPENPAR, "expected '(' to begin if condition");
+	P->token = P->token->next;
+	TreeNode* node = malloc(sizeof(TreeNode));
+	node->ifval = malloc(sizeof(TreeIf));
+	node->type = NODE_IF;
+	/* mark the end of the condition */
+	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR); 
+	/* parse the condition */
+	node->ifval->condition = expression_to_tree(P);
+	node->ifval->child = NULL;
+	P->token = P->token->next;
+	append(P, node);
+}
+
+static void 
+parse_while(ParseState* P) {
+	/* starts on token WHILE */
+	P->token = P->token->next;
+	make_sure(P, TOK_OPENPAR, "expected '(' to begin while condition");
+	P->token = P->token->next;
+	TreeNode* node = malloc(sizeof(TreeNode));
+	node->whileval = malloc(sizeof(TreeWhile));
+	node->type = NODE_WHILE;
+	/* mark the end of the condition */
+	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR); 
+	/* parse the condition */
+	node->whileval->condition = expression_to_tree(P);
+	node->whileval->child = NULL;
+	P->token = P->token->next;
+	append(P, node);
+}
+
+static void
+parse_for(ParseState* P) {
+	/* starts on token FOR */
+	P->token = P->token->next;
+	make_sure(P, TOK_OPENPAR, "expected '(' after token 'for'");
+	P->token = P->token->next;
+	TreeNode* node = malloc(sizeof(TreeNode));
+	node->type = NODE_FOR;
+	node->forval = malloc(sizeof(TreeFor));
+	node->forval->child = NULL;
+	/* initializer ends with a semicolon */
+	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
+	node->forval->initializer = expression_to_tree(P);
+	P->token = P->token->next;
+	/* condition ends with a semicolon */
+	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
+	node->forval->condition = expression_to_tree(P);
+	P->token = P->token->next;
+	/* statements ends with a closing parenthesis */
+	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR);
+	node->forval->statement = expression_to_tree(P);	
+	P->token = P->token->next;
+	append(P, node);
+}
+
+/* this function is unlike other parse functions... It doesn't
+ * actually parse the block, it just sets the block up for
+ * nodes to be placed inside of it */
+static void
+parse_block(ParseState* P) {
+	/* starts on token '{' */
+	P->token = P->token->next;
+	TreeNode* node = malloc(sizeof(TreeNode));
+	node->type = NODE_BLOCK;
+	node->blockval = malloc(sizeof(TreeBlock));
+	node->blockval->child = NULL;
+	append(P, node);	
+}
+
 ParseState*
-generate_tree(LexState* L) {
+generate_tree(LexState* L, ParseOptions* options) {
 	ParseState* P = malloc(sizeof(ParseState));
 	P->filename = L->filename;
 	P->total_lines = L->total_lines;
+	P->options = options;
 	P->token = L->tokens;
 	P->end_mark = NULL;	
+	P->to_append = NULL;
 	P->defined_types = malloc(sizeof(SpyTypeList));
 	P->defined_types->next = NULL;
 	P->defined_types->prev = NULL;
@@ -745,19 +1096,54 @@ generate_tree(LexState* L) {
 	type_byte->size = 1;
 	type_byte->modifier = 0;
 	register_datatype(P, type_byte);
+
+	/* establish the root block */
+	TreeNode* root = malloc(sizeof(TreeNode));
+	root->type = NODE_BLOCK;
+	root->parent = NULL;
+	root->next = NULL;
+	root->prev = NULL;
+	root->blockval = malloc(sizeof(TreeBlock));
+	root->blockval->child = NULL;
+	P->root_block = root;
+	P->current_block = root;
 	
 	while (P->token) {	
 		TreeNode* node;
+		if (P->token->type == TOK_SEMICOLON) {
+			P->token = P->token->next;
+			continue;
+		}
 		switch (P->token->type) {
 			case TOK_IF:
-				//node = parse_if(P);
+				parse_if(P);
+				break;
+			case TOK_WHILE:
+				parse_while(P);
+				break;
+			case TOK_FOR:
+				parse_for(P);
+				break;
+			case TOK_OPENCURL:
+				parse_block(P);
+				break;
+			case TOK_CLOSECURL:
+				if (P->current_block == P->root_block) {
+					parse_error(P, "token '}' doesn't close anything");
+				}
+				jump_out(P);
 				break;
 			default:
-				//node = parse_statement(P);
+				/* expect an expression ending with a semicolon */
+				mark_expression(P, TOK_NULL, TOK_SEMICOLON);
+				node = parse_statement(P);
+				append(P, node);
 				break;
 		}
 				
 	}
+
+	print_node(P->root_block, 0);
 
 	return P;
 }	

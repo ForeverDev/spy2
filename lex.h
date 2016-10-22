@@ -55,7 +55,6 @@ enum TokenType {
 	TOK_CLOSESQ = 93,
 	TOK_UPCARROT = 94,
 	TOK_UNDERSCORE = 95,
-	TOK_IFORGOTLOL = 96,
 	TOK_DOTS = 97,
 	TOK_OPENCURL = 123,
 	TOK_LINE = 124,
@@ -104,7 +103,7 @@ struct LexState {
 LexState* generate_tokens(const char*);
 void append_token(Token*, char*, unsigned int, unsigned int);
 void print_tokens(Token*);
-char tt_to_word(TokenType);
+char* tt_to_word(TokenType);
 Token* blank_token();
 
 #endif

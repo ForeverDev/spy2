@@ -20,36 +20,25 @@ int main(int argc, char** argv) {
 	char* args[] = {argv[1]};
 
 	const unsigned int flags = SPY_NOFLAG;
+
+	ParseOptions options;
+	options.opt_level = OPT_THREE;
+	//options.opt_level = OPT_ZERO;
 	
 	if (strlen(argv[1]) == 1) {
 		if (!strncmp(argv[1], "a", 1)) {
 			Assembler_generateBytecodeFile(argv[2]);
 		} else if (!strncmp(argv[1], "r", 1)) {
-			//Spy_execute(argv[2], SPY_NOFLAG | SPY_STEP | SPY_DEBUG, 1, args);
 			Spy_execute(argv[2], flags, 1, args);
 		} else if (!strncmp(argv[1], "c", 1)) {
 			LexState* tokens = generate_tokens(argv[2]);	
-			ParseState* tree = generate_tree(tokens);
+			ParseState* tree = generate_tree(tokens, &options);
 		}
 	} else {
 		if (!correct_suffix(argv[1])) {
 			printf("expected Spyre source file\n");
 			exit(1);
 		}	
-		/*
-		unsigned int len = strlen(argv[1]);
-		char* asm_file = calloc(1, len + 2);
-		char* binary_file = calloc(1, len + 2);
-		strcpy(asm_file, argv[1]);
-		strcat(asm_file, "s");
-		strcpy(binary_file, argv[1]);
-		strcat(binary_file, "b");
-		Token* tokens = generate_tokens(argv[1]);
-		ParseState* tree = generate_tree(tokens);
-		generate_bytecode(tree, asm_file);
-		Assembler_generateBytecodeFile(asm_file);
-		Spy_execute(binary_file, flags, 1, args);
-		*/
 	}
 
 	return 0;

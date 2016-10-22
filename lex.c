@@ -4,6 +4,86 @@
 #include <string.h>
 #include "lex.h"
 
+static char* token_map[] = {
+	[TOK_NULL] = "null",
+	[TOK_IF] = "if",
+	[TOK_ELSE] = "else",
+	[TOK_WHILE] = "while",
+	[TOK_DO] = "do",
+	[TOK_FUNCTION] = "func",
+	[TOK_RETURN] = "return",
+	[TOK_SWITCH] = "switch",
+	[TOK_CASE] = "case",
+	[TOK_CONTINUE] = "continue",
+	[TOK_BREAK] = "break",
+	[TOK_FOR] = "for",
+	[TOK_IDENTIFIER] = "id",
+	[TOK_INT] = "int",
+	[TOK_STRING] = "string",
+	[TOK_FUNCCALL] = "()",
+	[TOK_STRUCT] = "struct",
+	[TOK_FLOAT] = "float",
+	[TOK_CFUNC] = "cfunc",
+	[TOK_CAST] = "cast",
+	[TOK_ELIF] = "elif",
+	[TOK_SPACE] = "<space>",
+	[TOK_EXCL] = "!",
+	[TOK_DQUOTE] = "\"",
+	[TOK_POUND] = "#",
+	[TOK_DOLLAR] = "$",
+	[TOK_PERCENT] = "%",
+	[TOK_AMPERSAND] = "&",
+	[TOK_QUOTE] = "'",
+	[TOK_OPENPAR] = "(",
+	[TOK_CLOSEPAR] = ")",
+	[TOK_ASTER] = "*",
+	[TOK_PLUS] = "+",
+	[TOK_COMMA] = ",",
+	[TOK_HYPHON] = "-",
+	[TOK_PERIOD] = ".",
+	[TOK_FORSLASH] = "/",
+	[TOK_COLON] = ":",
+	[TOK_SEMICOLON] = ";",
+	[TOK_LT] = "<",
+	[TOK_ASSIGN] = "=",
+	[TOK_GT] = ">",
+	[TOK_QUESTION] = "?",
+	[TOK_AT] = "@",
+	[TOK_OPENSQ] = "[",
+	[TOK_BACKSLASH] = "\\",
+	[TOK_CLOSESQ] = "]",
+	[TOK_UPCARROT] = "^",
+	[TOK_UNDERSCORE] = "_",
+	[TOK_DOTS] = "...",
+	[TOK_OPENCURL] = "{",
+	[TOK_LINE] = "|",
+	[TOK_CLOSECURL] = "}",
+	[TOK_TILDE] = "~",
+	[TOK_LOGAND] = "&&",
+	[TOK_LOGOR] = "||",
+	[TOK_SHR] = ">>",
+	[TOK_SHL] = "<<",
+	[TOK_INC] = "++",
+	[TOK_INCBY] = "+=",
+	[TOK_DEC] = "--",
+	[TOK_DECBY] = "-=",
+	[TOK_MULBY] = "*=",
+	[TOK_DIVBY] = "/=",
+	[TOK_MODBY] = "%=",
+	[TOK_ANDBY] = "&=",
+	[TOK_ORBY] = "|=",
+	[TOK_XORBY] = "^=",
+	[TOK_SHRBY] = ">>=",
+	[TOK_SHLBY] = "<<=",
+	[TOK_ARROWBY] = "->=",
+	[TOK_EQ] = "==",
+	[TOK_NOTEQ] = "!=",
+	[TOK_GE] = ">=",
+	[TOK_LE] = "<=",
+	[TOK_ARROW] = "->",
+	[TOK_IGNORE] = "?"
+};
+
 void
 print_tokens(Token* head) {
 	while (head) {
@@ -17,12 +97,9 @@ blank_token() {
 	return (Token *)calloc(1, sizeof(Token));
 }
 
-char
+char*
 tt_to_word(TokenType type) {
-	if (type >= 32 && type <= 97) {
-		return (char)type;
-	}
-	return '?';
+	return token_map[type];
 }
 
 void
