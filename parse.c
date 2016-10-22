@@ -26,14 +26,16 @@ static void next(ParseState*, int);
 static void register_datatype(ParseState*, SpyType*);
 static SpyType* get_datatype(ParseState*, const char*);
 static int matches_datatype(ParseState*);
-static void make_sure(ParseState*, TokenType, const char*);
+static void make_sure(ParseState*, TokenType, const char*, ...);
 static void print_datatype(SpyType*);
 static void mark_expression(ParseState*, TokenType, TokenType);
 static TreeNode* new_node(ParseState*, TreeNodeType);
 static void append(ParseState*, TreeNode*);
 static int is_keyword(const char*);
+static Token* peek(ParseState*, int);
 
 static TreeNode* parse_statement(ParseState*);
+static TreeDecl* parse_declaration(ParseState*);
 static void parse_if(ParseState*);
 static void parse_while(ParseState*);
 static void parse_for(ParseState*);
@@ -90,25 +92,44 @@ static const int optimizable[255] = {
 	[TOK_EQ] = 1
 };
 
+/* called by parse_error and make_sure */
 static void
-parse_error(ParseState* P, const char* format, ...) {
-	va_list list;
-	va_start(list, format);
+parse_die(ParseState* P, const char* format, va_list list) {
 	printf("\n\n*** SPYRE COMPILE-TIME ERROR ***\n\n");
 	printf("\tmessage: ");
 	vprintf(format, list);
 	/* resort to last line if there is no token */
 	printf("\n\tline:    %d\n", P->token ? P->token->line : P->total_lines);
 	printf("\tfile:    %s\n\n", P->filename);
-	va_end(list);
 	exit(1);
 }
 
 static void
-make_sure(ParseState* P, TokenType type, const char* err) {
-	if (!P->token || P->token->type != type) {
-		parse_error(P, err);
+parse_error(ParseState* P, const char* format, ...) {
+	va_list list;
+	va_start(list, format);
+	parse_die(P, format, list);
+	va_end(list);
+}
+
+static Token*
+peek(ParseState* P, int amount) {
+	Token* at = P->token;
+	for (int i = 0; i < amount; i++) {
+		if (!at) return NULL;
+		at = at->next;
 	}
+	return at;
+}
+
+static void
+make_sure(ParseState* P, TokenType type, const char* err, ...) {
+	va_list list;
+	va_start(list, err);
+	if (!P->token || P->token->type != type) {
+		parse_die(P, err, list);
+	}
+	va_end(list);
 }
 
 static int
@@ -984,6 +1005,21 @@ parse_statement(ParseState* P) {
 	return node;
 }
 
+static TreeDecl*
+parse_declaration(ParseState* P) {
+	/* expects to be on identifier of declaration */
+	TreeDecl* decl = malloc(sizeof(TreeDecl));
+	decl->identifier = malloc(strlen(P->token->word) + 1);
+	strcpy(decl->identifier, P->token->word);
+	P->token = P->token->next->next;
+	if (!matches_datatype(P)) {
+		parse_error(P, "expected data type after ':', got token '%s'", P->token->word);
+	}
+	decl->datatype = parse_datatype(P);
+	make_sure(P, TOK_SEMICOLON, "expected ';' after declaration of '%s'", decl->identifier);
+	P->token = P->token->next;
+}
+
 static void 
 parse_if(ParseState* P) {
 	/* starts on token IF */
@@ -1134,10 +1170,14 @@ generate_tree(LexState* L, ParseOptions* options) {
 				jump_out(P);
 				break;
 			default:
-				/* expect an expression ending with a semicolon */
-				mark_expression(P, TOK_NULL, TOK_SEMICOLON);
-				node = parse_statement(P);
-				append(P, node);
+				if (peek(P, 1) && peek(P, 1)->type == TOK_COLON) {
+					TreeDecl* decl = parse_declaration(P);	
+				} else {
+					/* expect an expression ending with a semicolon */
+					mark_expression(P, TOK_NULL, TOK_SEMICOLON);
+					node = parse_statement(P);
+					append(P, node);
+				}
 				break;
 		}
 				

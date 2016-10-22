@@ -18,6 +18,7 @@ typedef struct TreeStatement TreeStatement;
 typedef struct TreeIf TreeIf;
 typedef struct TreeWhile TreeWhile;
 typedef struct TreeFor TreeFor;
+typedef struct TreeDecl TreeDecl;
 typedef enum TreeNodeType TreeNodeType;
 
 enum TreeNodeType {
@@ -71,6 +72,11 @@ struct TreeFor {
 	ExpNode* condition;
 	ExpNode* statement;
 	TreeNode* child;
+};
+
+struct TreeDecl {
+	char* identifier;
+	SpyType* datatype;
 };
 
 struct TreeBlock {
