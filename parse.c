@@ -1012,9 +1012,6 @@ parse_declaration(ParseState* P) {
 	decl->identifier = malloc(strlen(P->token->word) + 1);
 	strcpy(decl->identifier, P->token->word);
 	P->token = P->token->next->next;
-	if (!matches_datatype(P)) {
-		parse_error(P, "expected data type after ':', got token '%s'", P->token->word);
-	}
 	decl->datatype = parse_datatype(P);
 	make_sure(P, TOK_SEMICOLON, "expected ';' after declaration of '%s'", decl->identifier);
 	P->token = P->token->next;
