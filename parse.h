@@ -19,6 +19,7 @@ typedef struct TreeIf TreeIf;
 typedef struct TreeWhile TreeWhile;
 typedef struct TreeFor TreeFor;
 typedef struct TreeDecl TreeDecl;
+typedef struct TreeFunction TreeFunction;
 typedef enum TreeNodeType TreeNodeType;
 
 enum TreeNodeType {
@@ -26,7 +27,8 @@ enum TreeNodeType {
 	NODE_FOR,
 	NODE_WHILE,
 	NODE_STATEMENT,
-	NODE_BLOCK
+	NODE_BLOCK,
+	NODE_FUNCTION
 };
 
 struct SpyType {
@@ -83,6 +85,13 @@ struct TreeBlock {
 	TreeNode* child;
 };
 
+struct TreeFunction {
+	char* identifier;
+	uint32_t modifies;
+	SpyVariableList* params;
+	TreeNode* child;
+};
+
 struct TreeNode {
 	TreeNodeType type;
 	union {
@@ -91,6 +100,7 @@ struct TreeNode {
 		TreeWhile* whileval;
 		ExpNode* stateval;
 		TreeBlock* blockval;
+		TreeFunction* funcval;
 	};
 	TreeNode* next;
 	TreeNode* prev;

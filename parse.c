@@ -10,6 +10,7 @@
 #define MOD_STATIC (0x1 << 0)
 #define MOD_CONST (0x1 << 1)
 #define MOD_VOLATILE (0x1 << 2)
+#define MOD_COUNT 3
 
 typedef struct ExpStack ExpStack;
 typedef struct OperatorInfo OperatorInfo;
@@ -26,12 +27,14 @@ static void next(ParseState*, int);
 static void register_datatype(ParseState*, SpyType*);
 static SpyType* get_datatype(ParseState*, const char*);
 static int matches_datatype(ParseState*);
+static int matches_function(ParseState*);
 static void make_sure(ParseState*, TokenType, const char*, ...);
 static void print_datatype(SpyType*);
 static void mark_expression(ParseState*, TokenType, TokenType);
 static TreeNode* new_node(ParseState*, TreeNodeType);
 static void append(ParseState*, TreeNode*);
 static int is_keyword(const char*);
+static int get_modifier(const char*);
 static Token* peek(ParseState*, int);
 
 static TreeNode* parse_statement(ParseState*);
@@ -39,6 +42,7 @@ static TreeDecl* parse_declaration(ParseState*);
 static void parse_if(ParseState*);
 static void parse_while(ParseState*);
 static void parse_for(ParseState*);
+static void parse_function(ParseState*);
 
 static void expstack_push(ExpStack*, ExpNode*);
 static void expstack_print(ExpStack*);
@@ -60,6 +64,11 @@ struct OperatorInfo {
 	} optype;
 };
 
+struct ModifierInfo {
+	const char* identifier;
+	uint32_t bitflag;
+};
+
 /* only used to generate a postfix representation
  * of an expression */
 struct ExpStack {
@@ -68,8 +77,10 @@ struct ExpStack {
 	ExpStack* prev;
 };
 
-static const char* modifiers[] = {
-	"static", "const", "volatile"
+static const ModifierInfo modifiers[3] = {
+	{"static", MOD_STATIC},
+	{"const", MOD_CONST},
+	{"volatile", MOD_VOLATILE}
 };
 
 static const char* keywords[32] = {
@@ -130,6 +141,16 @@ make_sure(ParseState* P, TokenType type, const char* err, ...) {
 		parse_die(P, err, list);
 	}
 	va_end(list);
+}
+
+static int 
+get_modifier(const char* word) {
+	for (int i = 0; i < MOD_COUNT; i++) {
+		if (!strcmp(word, modifiers[i].identifier)) {
+			return modifiers[i].bitflag;
+		}
+	}
+	return 0;
 }
 
 static int
@@ -318,7 +339,7 @@ get_datatype(ParseState* P, const char* type_name) {
 static void
 print_datatype(SpyType* type) {
 	printf("(");
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 4; i++) {
 		if ((type->modifier >> i) & 0x1) {
 			printf("%s ", modifiers[i]);
 		}
@@ -444,10 +465,29 @@ print_expression_tree(ExpNode* tree, int indent) {
 	}
 }
 
+/* tells whether or not the parser is looking at a function definition */
+/* syntax:
+ *	 <identifier> ":" <modifier>* "(" <declaration>* ")" -> <datatype> "{"
+ */
+static int
+matches_function(ParseState* P) {
+	Token* at = P->token;
+	if (!at || at->type != TOK_IDENTIFIER) return 0;	
+	at = at->next;
+	if (!at || at->type != TOK_COLON) return 0;
+	at = at->next;
+	/* optional function modifiers */
+	while (at && get_modifier(at->word)) {
+		at = at->next;
+	}
+	if (!at || at->type != TOK_OPENPAR) return 0;
+	return 1;
+}
+
 /* tells whether or not the parser is looking at a datatype */
 static int
 matches_datatype(ParseState* P) {
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 4; i++) {
 		if (!strcmp(modifiers[i], P->token->word)) {
 			return 1;
 		}
@@ -965,7 +1005,7 @@ parse_datatype(ParseState* P) {
 	int found;
 	do {
 		found = 0;
-		for (int i = 0; i < 3; i++) {
+		for (int i = 0; i < 4; i++) {
 			if (!strcmp(P->token->word, modifiers[i])) {
 				type->modifier |= (
 					i == 0 ? MOD_STATIC :
@@ -1015,6 +1055,19 @@ parse_declaration(ParseState* P) {
 	decl->datatype = parse_datatype(P);
 	make_sure(P, TOK_SEMICOLON, "expected ';' after declaration of '%s'", decl->identifier);
 	P->token = P->token->next;
+}
+
+static void
+parse_function(ParseState* P) {
+	/* expects to be on the function identifier */
+	TreeNode* node = malloc(sizeof(TreeNode));
+	node->type = NODE_FUNCTION;
+	node->funcval = malloc(sizeof(TreeFunction));
+	node->funcval->identifier = malloc(strlen(P->token->word) + 1);
+	strcpy(node->funcval->identifier, P->token->word);
+	P->token = P->token->next->next;
+	/* no need to make sure we're on a semicolon, matches_function() already did that */
+
 }
 
 static void 
@@ -1146,6 +1199,8 @@ generate_tree(LexState* L, ParseOptions* options) {
 		if (P->token->type == TOK_SEMICOLON) {
 			P->token = P->token->next;
 			continue;
+		} else if (matches_function(P)) {
+			parse_function(P);
 		}
 		switch (P->token->type) {
 			case TOK_IF:
