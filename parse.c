@@ -16,26 +16,30 @@ typedef struct OperatorInfo OperatorInfo;
 
 static SpyType* parse_datatype(ParseState*);
 static ExpNode* expression_to_tree(ParseState*);
-static void simplify_tree(ParseState*, ExpNode*);
-static int simplify_available(ParseState*, ExpNode*);
+static void optimize_branching(ParseState*, TreeNode*);
+static void optimize_tree_arith(ParseState*, ExpNode*);
+static int optimize_arith_available(ParseState*, ExpNode*);
 static void print_node(TreeNode*, int);
 static void print_expression_tree(ExpNode*, int);
 static Token* token(ParseState*);
 static int on(ParseState*, int, ...);
 static void next(ParseState*, int);
 static void register_datatype(ParseState*, SpyType*);
+static void register_local(ParseState*, TreeVariable*);
 static SpyType* get_datatype(ParseState*, const char*);
 static int matches_datatype(ParseState*);
 static void make_sure(ParseState*, TokenType, const char*, ...);
 static void print_datatype(SpyType*);
+static void print_declaration(TreeVariable*);
 static void mark_expression(ParseState*, TokenType, TokenType);
 static TreeNode* new_node(ParseState*, TreeNodeType);
 static void append(ParseState*, TreeNode*);
 static int is_keyword(const char*);
 static Token* peek(ParseState*, int);
+static void typcheck_tree(ParseState*, ExpNode*);
 
 static TreeNode* parse_statement(ParseState*);
-static TreeDecl* parse_declaration(ParseState*);
+static TreeVariable* parse_declaration(ParseState*);
 static void parse_if(ParseState*);
 static void parse_while(ParseState*);
 static void parse_for(ParseState*);
@@ -100,7 +104,7 @@ parse_die(ParseState* P, const char* format, va_list list) {
 	vprintf(format, list);
 	/* resort to last line if there is no token */
 	printf("\n\tline:    %d\n", P->token ? P->token->line : P->total_lines);
-	printf("\tfile:    %s\n\n", P->filename);
+	printf("\tfile:    %s\n\n\n", P->filename);
 	exit(1);
 }
 
@@ -305,6 +309,23 @@ register_datatype(ParseState* P, SpyType* type) {
 	list->next = new;
 }
 
+static void
+register_local(ParseState* P, TreeVariable* var) {
+	TreeBlock* block = P->current_block->blockval;
+	if (!block->locals) {
+		block->locals = malloc(sizeof(TreeVariableList));
+		block->locals->variable = var;
+		block->locals->next = NULL;
+		return;
+	}	
+	TreeVariableList* i;
+	for (i = block->locals; i->next; i = i->next);
+	TreeVariableList* new = malloc(sizeof(TreeVariableList));
+	new->variable = var;
+	new->next = NULL;
+	i->next = new;
+}
+
 static SpyType*
 get_datatype(ParseState* P, const char* type_name) {
 	for (SpyTypeList* i = P->defined_types; i && i->datatype; i = i->next) {
@@ -330,6 +351,12 @@ print_datatype(SpyType* type) {
 	printf(")");
 }
 
+static void
+print_declaration(TreeVariable* var) {
+	printf("%s: ", var->identifier);
+	print_datatype(var->datatype);
+}
+
 #define INDENT(n) for (int _=0; _<(n); _++) printf("    ")
 
 static void
@@ -344,12 +371,25 @@ print_node(TreeNode* node, int indent) {
 			printf("]\n");
 			break;
 		case NODE_BLOCK:
-			printf("BLOCK: {\n");
-			for (TreeNode* i = node->blockval->child; i; i = i->next) {
-				print_node(i, indent + 1);
+			printf("BLOCK: [\n");
+			INDENT(indent + 1);
+			printf("LOCALS: [\n");
+			for (TreeVariableList* i = node->blockval->locals; i; i = i->next) {
+				INDENT(indent + 2);
+				print_declaration(i->variable);
+				printf("\n");
 			}
+			INDENT(indent + 1);
+			printf("]\n");
+			INDENT(indent + 1);
+			printf("CHILD: [\n");
+			for (TreeNode* i = node->blockval->child; i; i = i->next) {
+				print_node(i, indent + 2);
+			}
+			INDENT(indent + 1);
+			printf("]\n");
 			INDENT(indent);
-			printf("}\n");
+			printf("]\n");
 			break;
 		case NODE_IF:
 			printf("IF: [\n");
@@ -514,8 +554,80 @@ append(ParseState* P, TreeNode* node) {
 	}
 }
 
+static TreeVariable*
+get_local(ParseState* P, const char* identifier) {
+	for (TreeNode* i = P->current_block; i; i = i->parent) {
+		if (i->type != NODE_BLOCK) continue;
+		for (TreeVariableList* j = i->blockval->locals; j; j = j->next) {
+			if (!strcmp(j->variable->identifier, identifier)) {
+				return j->variable;
+			}
+		}
+	}
+	return NULL;
+}
+
+static const SpyType*
+tree_datatype(ParseState* P, ExpNode* tree) {
+	if (tree->type == EXP_BINOP) {
+		const SpyType* left = tree_datatype(P, tree->bval->left);
+		const SpyType* right = tree_datatype(P, tree->bval->right);
+	} else if (tree->type == EXP_UNOP) {
+		const SpyType* operand = tree_datatype(P, tree->uval->operand);
+	} else if (tree->type == EXP_IDENTIFIER) {
+		TreeVariable* var = get_local(P, tree->idval);	
+		if (!var) {
+			parse_error(P, "undeclared identifier '%s'", tree->idval);
+		}
+		return var->datatype;
+	} else if (tree->type == EXP_INTEGER) {
+		return P->type_integer;	 
+	} else if (tree->type == EXP_FLOAT) {
+		return P->type_float;
+	} else if (tree->type == EXP_BYTE) {
+		return P->type_byte;
+	}
+}
+
+static void
+typecheck_expression(ParseState* P, ExpNode* tree) {
+	
+}
+
+/* optimizes trivial branching, e.g.
+ * if (0) {
+ * 
+ * }
+ * will be ignored and
+ * if (1) {
+ *
+ * }
+ * will not test the condition
+ */
+static void
+optimize_branching(ParseState* P, TreeNode* node) {
+	if (!node) return;
+	switch (node->type) {
+		case NODE_BLOCK:
+			for (TreeNode* i = node->blockval->child; i; i = i->next) {
+				optimize_branching(P, i);
+			}
+			break;
+		case NODE_IF:
+			if (node->ifval->condition->type == EXP_INTEGER 
+				|| node->ifval->condition->type == EXP_FLOAT
+			) {	
+				/* it's optimizable */
+				if (!(uint64_t)node->ifval->condition->ival) {
+				
+				}
+			}
+			break;
+	}
+}
+
 static int
-simplify_available(ParseState* P, ExpNode* tree) {
+optimize_arith_available(ParseState* P, ExpNode* tree) {
 	switch (tree->type) {
 		case EXP_BINOP: {
 			ExpNode* left = tree->bval->left;
@@ -529,10 +641,10 @@ simplify_available(ParseState* P, ExpNode* tree) {
 				return 1;
 			}
 			if (left->type == EXP_BINOP || left->type == EXP_UNOP) {
-				return simplify_available(P, left);
+				return optimize_arith_available(P, left);
 			}
 			if (right->type == EXP_BINOP || right->type == EXP_UNOP) {
-				return simplify_available(P, right);
+				return optimize_arith_available(P, right);
 			}
 			return 0;
 		}
@@ -545,7 +657,7 @@ simplify_available(ParseState* P, ExpNode* tree) {
 				return 1;
 			}
 			if (operand->type == EXP_BINOP || operand->type == EXP_UNOP) {
-				return simplify_available(P, operand);
+				return optimize_arith_available(P, operand);
 			}
 			return 0;
 		}
@@ -557,7 +669,7 @@ simplify_available(ParseState* P, ExpNode* tree) {
 /* optimizes a tree to get rid of trivial arithmetic, e.g.
  * 5 + 10 + x can be condensed to 15 + x */
 static void
-simplify_tree(ParseState* P, ExpNode* tree) {
+optimize_tree_arith(ParseState* P, ExpNode* tree) {
 
 	ExpNode* new = NULL;
 	if (!tree) return;
@@ -567,10 +679,10 @@ simplify_tree(ParseState* P, ExpNode* tree) {
 			ExpNode* right = tree->bval->right;
 			/* break if it can't be condensed */
 			if (left->type == EXP_BINOP || left->type == EXP_UNOP) {
-				simplify_tree(P, left);
+				optimize_tree_arith(P, left);
 			}
 			if (right->type == EXP_BINOP || right->type == EXP_UNOP) {
-				simplify_tree(P, right);
+				optimize_tree_arith(P, right);
 			}
 			if (left->type != EXP_INTEGER && left->type != EXP_FLOAT) {
 				break;
@@ -631,7 +743,7 @@ simplify_tree(ParseState* P, ExpNode* tree) {
 		case EXP_UNOP: {
 			ExpNode* operand = tree->uval->operand;
 			if (operand->type == EXP_BINOP || operand->type == EXP_UNOP) {
-				simplify_tree(P, operand);
+				optimize_tree_arith(P, operand);
 			}
 			if (operand->type != EXP_INTEGER && operand->type != EXP_FLOAT) {
 				break;
@@ -919,10 +1031,12 @@ expression_to_tree(ParseState* P) {
 			expstack_push(tree, node);
 		}
 	}
+
+	typecheck_expression(P, tree->node);
 	
 	if (P->options->opt_level >= OPT_ONE) {	
-		while (simplify_available(P, tree->node)) {
-			simplify_tree(P, tree->node);
+		while (optimize_arith_available(P, tree->node)) {
+			optimize_tree_arith(P, tree->node);
 		}
 	}
 
@@ -967,10 +1081,14 @@ parse_datatype(ParseState* P) {
 		found = 0;
 		for (int i = 0; i < 3; i++) {
 			if (!strcmp(P->token->word, modifiers[i])) {
-				type->modifier |= (
+				unsigned int mod = (
 					i == 0 ? MOD_STATIC :
 					i == 1 ? MOD_CONST : MOD_VOLATILE
 				);
+				if (type->modifier & mod) {
+					parse_error(P, "duplicate modifier '%s' in variable declaration", P->token->word);
+				}
+				type->modifier |= mod;
 				found = 1;
 				P->token = P->token->next;
 				break;
@@ -1005,16 +1123,22 @@ parse_statement(ParseState* P) {
 	return node;
 }
 
-static TreeDecl*
+static TreeVariable*
 parse_declaration(ParseState* P) {
 	/* expects to be on identifier of declaration */
-	TreeDecl* decl = malloc(sizeof(TreeDecl));
+	TreeVariable* decl = malloc(sizeof(TreeVariable));
 	decl->identifier = malloc(strlen(P->token->word) + 1);
 	strcpy(decl->identifier, P->token->word);
 	P->token = P->token->next->next;
 	decl->datatype = parse_datatype(P);
-	make_sure(P, TOK_SEMICOLON, "expected ';' after declaration of '%s'", decl->identifier);
+	make_sure(P, 
+		TOK_SEMICOLON, 
+		"expected ';' after declaration of '%s', got token '%s'", 
+		decl->identifier, 
+		P->token->word
+	);
 	P->token = P->token->next;
+	return decl;
 }
 
 static void 
@@ -1088,6 +1212,7 @@ parse_block(ParseState* P) {
 	TreeNode* node = malloc(sizeof(TreeNode));
 	node->type = NODE_BLOCK;
 	node->blockval = malloc(sizeof(TreeBlock));
+	node->blockval->locals = NULL;
 	node->blockval->child = NULL;
 	append(P, node);	
 }
@@ -1112,6 +1237,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 	type_int->plevel = 0;
 	type_int->size = 8;
 	type_int->modifier = 0;
+	P->type_integer = type_int;
 	register_datatype(P, type_int);
 	
 	/* establish primitive float */
@@ -1120,6 +1246,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 	type_float->plevel = 0;
 	type_float->size = 8;
 	type_float->modifier = 0;
+	P->type_float = type_float;
 	register_datatype(P, type_float);
 	
 	/* establish primitive byte */
@@ -1128,6 +1255,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 	type_byte->plevel = 0;
 	type_byte->size = 1;
 	type_byte->modifier = 0;
+	P->type_byte = type_byte;
 	register_datatype(P, type_byte);
 
 	/* establish the root block */
@@ -1168,7 +1296,8 @@ generate_tree(LexState* L, ParseOptions* options) {
 				break;
 			default:
 				if (peek(P, 1) && peek(P, 1)->type == TOK_COLON) {
-					TreeDecl* decl = parse_declaration(P);	
+					TreeVariable* decl = parse_declaration(P);	
+					register_local(P, decl);
 				} else {
 					/* expect an expression ending with a semicolon */
 					mark_expression(P, TOK_NULL, TOK_SEMICOLON);
@@ -1178,6 +1307,10 @@ generate_tree(LexState* L, ParseOptions* options) {
 				break;
 		}
 				
+	}
+
+	if (P->options->opt_level >= OPT_TWO) {
+		optimize_branching(P, P->root_block);	
 	}
 
 	print_node(P->root_block, 0);

@@ -18,7 +18,8 @@ typedef struct TreeStatement TreeStatement;
 typedef struct TreeIf TreeIf;
 typedef struct TreeWhile TreeWhile;
 typedef struct TreeFor TreeFor;
-typedef struct TreeDecl TreeDecl;
+typedef struct TreeVariable TreeVariable;
+typedef struct TreeVariableList TreeVariableList;
 typedef enum TreeNodeType TreeNodeType;
 
 enum TreeNodeType {
@@ -36,10 +37,20 @@ struct SpyType {
 	uint16_t modifier;
 };
 
+struct TreeVariable {
+	char* identifier;
+	SpyType* datatype;	
+};
+
 struct SpyTypeList {
 	SpyType* datatype;
 	SpyTypeList* next;
 	SpyTypeList* prev;
+};
+
+struct TreeVariableList {
+	TreeVariable* variable;
+	TreeVariableList* next;
 };
 
 /* expresstion structs */
@@ -71,16 +82,13 @@ struct TreeFor {
 	ExpNode* initializer;
 	ExpNode* condition;
 	ExpNode* statement;
+	TreeVariable* var; /* optional declaration in initializer */
 	TreeNode* child;
-};
-
-struct TreeDecl {
-	char* identifier;
-	SpyType* datatype;
 };
 
 struct TreeBlock {
 	TreeNode* child;
+	TreeVariableList* locals;
 };
 
 struct TreeNode {
@@ -117,6 +125,7 @@ struct ExpNode {
 		EXP_STRING,
 		EXP_INTEGER,
 		EXP_FLOAT,
+		EXP_BYTE,
 		EXP_DATATYPE,
 		EXP_LOCAL,
 		EXP_IDENTIFIER,
@@ -153,6 +162,9 @@ struct ParseState {
 	TreeNode* current_block;
 	TreeNode* root_block;
 	ParseOptions* options;
+	const SpyType* type_integer;
+	const SpyType* type_float;
+	const SpyType* type_byte;
 };
 
 ParseState* generate_tree(LexState*, ParseOptions*);
