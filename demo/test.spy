@@ -1,9 +1,9 @@
-factorial: static(n: int) -> int {
-	
+some_function: static(arg_0: float, arg_1: const int^) -> int^^ {
+	local_a: int;
+	local_b: byte^;
+	local_c: int;
+
+	local_c = local_a + (int)local_b * 42;
+	local_c = &local_a * ;
 }
 
-for (i = 0; i < 10; i = i + 1) {
-
-}
-
-factorial: (n: int) -> int;

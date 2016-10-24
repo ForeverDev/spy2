@@ -7,8 +7,8 @@
 typedef struct ParseState ParseState;
 typedef struct ParseOptions ParseOptions;
 typedef struct ExpNode ExpNode;
-typedef struct SpyType SpyType;
-typedef struct SpyTypeList SpyTypeList;
+typedef struct TreeType TreeType;
+typedef struct TreeTypeList TreeTypeList;
 typedef struct BinaryOp BinaryOp;
 typedef struct UnaryOp UnaryOp;
 typedef struct TypeCast TypeCast;
@@ -20,6 +20,8 @@ typedef struct TreeWhile TreeWhile;
 typedef struct TreeFor TreeFor;
 typedef struct TreeDecl TreeDecl;
 typedef struct TreeFunction TreeFunction;
+typedef struct TreeVariable TreeVariable;
+typedef struct TreeVariableList TreeVariableList;
 typedef enum TreeNodeType TreeNodeType;
 
 enum TreeNodeType {
@@ -31,17 +33,27 @@ enum TreeNodeType {
 	NODE_FUNCTION
 };
 
-struct SpyType {
+struct TreeType {
 	char* type_name;
 	unsigned int plevel; /* depth of pointer */
 	unsigned int size; /* number of bytes needed to store */
 	uint16_t modifier;
 };
 
-struct SpyTypeList {
-	SpyType* datatype;
-	SpyTypeList* next;
-	SpyTypeList* prev;
+struct TreeVariable {
+	char* identifier;
+	TreeType* datatype;	
+};
+
+struct TreeTypeList {
+	TreeType* datatype;
+	TreeTypeList* next;
+	TreeTypeList* prev;
+};
+
+struct TreeVariableList {
+	TreeVariable* variable;
+	TreeVariableList* next;
 };
 
 /* expresstion structs */
@@ -55,7 +67,7 @@ struct UnaryOp {
 	ExpNode* operand;
 };
 struct TypeCast {
-	SpyType* datatype;
+	TreeType* datatype;
 	ExpNode* operand;
 };
 
@@ -73,22 +85,20 @@ struct TreeFor {
 	ExpNode* initializer;
 	ExpNode* condition;
 	ExpNode* statement;
+	TreeVariable* var; /* optional declaration in initializer */
 	TreeNode* child;
-};
-
-struct TreeDecl {
-	char* identifier;
-	SpyType* datatype;
 };
 
 struct TreeBlock {
 	TreeNode* child;
+	TreeVariableList* locals;
 };
 
 struct TreeFunction {
 	char* identifier;
-	uint32_t modifies;
-	SpyVariableList* params;
+	uint32_t modifiers;
+	TreeVariableList* params;
+	TreeType* return_type;	
 	TreeNode* child;
 };
 
@@ -127,6 +137,7 @@ struct ExpNode {
 		EXP_STRING,
 		EXP_INTEGER,
 		EXP_FLOAT,
+		EXP_BYTE,
 		EXP_DATATYPE,
 		EXP_LOCAL,
 		EXP_IDENTIFIER,
@@ -137,7 +148,7 @@ struct ExpNode {
 		spy_float fval;
 		spy_string sval; 
 		char* idval;
-		SpyType* tval; /* datatype (e.g. cast, template) */
+		TreeType* tval; /* datatype (e.g. cast, template) */
 		UnaryOp* uval;
 		BinaryOp* bval;
 		TypeCast* cval;
@@ -158,11 +169,15 @@ struct ParseState {
 	unsigned int total_lines;
 	Token* token;
 	Token* end_mark; /* marks the end of an expression */ 
-	SpyTypeList* defined_types;
+	TreeTypeList* defined_types;
 	TreeNode* to_append;
 	TreeNode* current_block;
+	TreeNode* current_function;
 	TreeNode* root_block;
 	ParseOptions* options;
+	const TreeType* type_integer;
+	const TreeType* type_float;
+	const TreeType* type_byte;
 };
 
 ParseState* generate_tree(LexState*, ParseOptions*);
