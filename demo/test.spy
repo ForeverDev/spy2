@@ -1,6 +1,5 @@
-{	
-	if (0)
-		x = x + 1;
-	if (1 + x)
-		x = x + 1;
+x: (n: int) -> int {
+	return n * n;
+	continue;
+	break;
 }

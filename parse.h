@@ -30,7 +30,10 @@ enum TreeNodeType {
 	NODE_WHILE = 3,
 	NODE_STATEMENT = 4,
 	NODE_BLOCK = 5,
-	NODE_FUNCTION = 6
+	NODE_FUNCTION = 6,
+	NODE_RETURN = 7,
+	NODE_BREAK = 8,
+	NODE_CONTINUE = 9
 };
 
 struct TreeType {
@@ -108,7 +111,7 @@ struct TreeNode {
 		TreeIf* ifval;
 		TreeFor* forval;
 		TreeWhile* whileval;
-		ExpNode* stateval;
+		ExpNode* stateval; /* also used for return */
 		TreeBlock* blockval;
 		TreeFunction* funcval;
 	};

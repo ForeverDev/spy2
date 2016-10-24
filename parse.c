@@ -17,12 +17,12 @@ typedef struct OperatorInfo OperatorInfo;
 typedef struct ModifierInfo ModifierInfo;
 
 static TreeType* parse_datatype(ParseState*);
-static ExpNode* expression_to_tree(ParseState*);
+static ExpNode* parse_expression(ParseState*);
 static void optimize_branching(ParseState*, TreeNode*);
 static void optimize_tree_arith(ParseState*, ExpNode*);
 static int optimize_arith_available(ParseState*, ExpNode*);
 static void print_node(TreeNode*, int);
-static void print_expression_tree(ExpNode*, int);
+static void print_expression(ExpNode*, int);
 static Token* token(ParseState*);
 static int on(ParseState*, int, ...);
 static void next(ParseState*, int);
@@ -49,6 +49,9 @@ static void parse_if(ParseState*);
 static void parse_while(ParseState*);
 static void parse_for(ParseState*);
 static void parse_function(ParseState*);
+static void parse_return(ParseState*);
+static void parse_break(ParseState*);
+static void parse_continue(ParseState*);
 
 static void expstack_push(ExpStack*, ExpNode*);
 static void expstack_print(ExpStack*);
@@ -398,7 +401,7 @@ print_node(TreeNode* node, int indent) {
 	switch (node->type) {
 		case NODE_STATEMENT:
 			printf("STATEMENT: [\n");
-			print_expression_tree(node->stateval, indent + 1);	
+			print_expression(node->stateval, indent + 1);	
 			INDENT(indent);
 			printf("]\n");
 			break;
@@ -427,7 +430,7 @@ print_node(TreeNode* node, int indent) {
 			printf("IF: [\n");
 			INDENT(indent + 1);
 			printf("CONDITION: [\n");
-			print_expression_tree(node->ifval->condition, indent + 2);
+			print_expression(node->ifval->condition, indent + 2);
 			INDENT(indent + 1);
 			printf("]\n");
 			INDENT(indent + 1);
@@ -442,7 +445,7 @@ print_node(TreeNode* node, int indent) {
 			printf("WHILE: [\n");
 			INDENT(indent + 1);
 			printf("CONDITION: [\n");
-			print_expression_tree(node->whileval->condition, indent + 2);
+			print_expression(node->whileval->condition, indent + 2);
 			INDENT(indent + 1);
 			printf("]\n");
 			INDENT(indent + 1);
@@ -457,17 +460,17 @@ print_node(TreeNode* node, int indent) {
 			printf("FOR: [\n");
 			INDENT(indent + 1);
 			printf("INITIALIZER: [\n");
-			print_expression_tree(node->forval->initializer, indent + 2);
+			print_expression(node->forval->initializer, indent + 2);
 			INDENT(indent + 1);
 			printf("]\n");
 			INDENT(indent + 1);
 			printf("CONDITION: [\n");
-			print_expression_tree(node->forval->condition, indent + 2);
+			print_expression(node->forval->condition, indent + 2);
 			INDENT(indent + 1);
 			printf("]\n");
 			INDENT(indent + 1);
 			printf("STATEMENT: [\n");
-			print_expression_tree(node->forval->statement, indent + 2);
+			print_expression(node->forval->statement, indent + 2);
 			INDENT(indent + 1);
 			printf("]\n");
 			INDENT(indent + 1);
@@ -503,22 +506,34 @@ print_node(TreeNode* node, int indent) {
 			INDENT(indent);
 			printf("]\n");
 			break;
+		case NODE_RETURN:
+			printf("RETURN: [\n");
+			print_expression(node->stateval, indent + 1);
+			INDENT(indent);
+			printf("]\n");
+			break;
+		case NODE_BREAK:
+			printf("BREAK\n");
+			break;
+		case NODE_CONTINUE:
+			printf("CONTINUE\n");
+			break;
 	}	
 }
 
 static void
-print_expression_tree(ExpNode* tree, int indent) {
+print_expression(ExpNode* tree, int indent) {
 	if (!tree) return;
 	INDENT(indent);
 	switch (tree->type) {
 		case EXP_BINOP:
 			printf("%s\n", tt_to_word(tree->bval->type));
-			print_expression_tree(tree->bval->left, indent + 1);	
-			print_expression_tree(tree->bval->right, indent + 1);	
+			print_expression(tree->bval->left, indent + 1);	
+			print_expression(tree->bval->right, indent + 1);	
 			break;
 		case EXP_UNOP:
 			printf("%s\n", tt_to_word(tree->uval->type));
-			print_expression_tree(tree->uval->operand, indent + 1);	
+			print_expression(tree->uval->operand, indent + 1);	
 			break;
 		case EXP_INTEGER:
 			printf("%lld\n", tree->ival);
@@ -537,7 +552,7 @@ print_expression_tree(ExpNode* tree, int indent) {
 			printf("(");
 			print_datatype(tree->cval->datatype);
 			printf(")\n");
-			print_expression_tree(tree->cval->operand, indent + 1);
+			print_expression(tree->cval->operand, indent + 1);
 			break;
 	}
 }
@@ -607,6 +622,9 @@ new_node(ParseState* P, TreeNodeType type) {
 static void
 append(ParseState* P, TreeNode* node) {
 	/* stick it onto the node if it is appendable */
+	node->next = NULL;
+	node->prev = NULL;
+	node->parent = NULL;
 	if (P->to_append) {
 		switch (P->to_append->type) {
 			case NODE_IF:
@@ -726,8 +744,32 @@ optimize_branching(ParseState* P, TreeNode* node) {
 						case NODE_WHILE:
 							parent->whileval->child = node->whileval->child;
 							break;	
-						case NODE_BLOCK: {
-						}
+						case NODE_BLOCK:
+							node->ifval->child->parent = parent;
+							if (node->prev) {
+								if (node->next) {
+									node->ifval->child->prev = node->prev;
+									node->ifval->child->next = node->next;
+									node->prev->next = node->ifval->child;
+									node->next->prev = node->ifval->child;
+								} else {
+									node->ifval->child->prev = node->prev;
+									node->ifval->child->next = NULL;
+									node->prev->next = node->ifval->child;
+								}
+							} else {
+								if (node->next) {
+									parent->blockval->child = node->ifval->child;
+									node->ifval->child->next = node->next;
+									node->ifval->child->prev = NULL;
+								} else {
+									parent->blockval->child = node->ifval->child;
+									node->ifval->child->next = NULL;
+									node->ifval->child->prev = NULL;
+								}
+							}
+							break;
+						
 					}
 				/* condition is 0, remove completely */
 				} else {
@@ -738,24 +780,22 @@ optimize_branching(ParseState* P, TreeNode* node) {
 						case NODE_WHILE:
 							parent->whileval->child = NULL;
 							break;
-						case NODE_BLOCK: {
-							TreeNode* i;
-							for (i = parent->blockval->child; i && i != node; i = i->next);
-							if (i->prev) {
-								if (i->next) {
-									i->prev->next = i->next;
+						case NODE_BLOCK: 
+							if (node->prev) {
+								if (node->next) {
+									node->prev->next = node->next;
 								} else {
-									i->prev->next = NULL;
+									node->prev->next = NULL;
 								}
 							} else {
-								if (i->next) {
-									parent->blockval->child = i->next;
+								if (node->next) {
+									parent->blockval->child = node->next;
 								} else {
 									parent->blockval->child = NULL;
 								}
 							}
 							break;
-						}
+						
 					}
 				}
 			}
@@ -928,7 +968,7 @@ optimize_tree_arith(ParseState* P, ExpNode* tree) {
 }
 
 static ExpNode* 
-expression_to_tree(ParseState* P) {
+parse_expression(ParseState* P) {
 
 	if (!P->token || P->token->type == TOK_SEMICOLON) {
 		return NULL;
@@ -1253,7 +1293,7 @@ parse_datatype(ParseState* P) {
 static TreeNode*
 parse_statement(ParseState* P) {
 	TreeNode* node = new_node(P, NODE_STATEMENT);
-	node->stateval = expression_to_tree(P);
+	node->stateval = parse_expression(P);
 	return node;
 }
 
@@ -1323,6 +1363,40 @@ parse_function(ParseState* P) {
 	append(P, node);
 }
 
+static void
+parse_return(ParseState* P) {
+	/* starts on token RETURN */
+	P->token = P->token->next;
+	TreeNode* node = malloc(sizeof(TreeNode));
+	node->type = NODE_RETURN;
+	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
+	node->stateval = parse_expression(P);
+	P->token = P->token->next;
+	append(P, node);
+}
+
+static void
+parse_break(ParseState* P) {
+	/* starts on token BREAK */
+	P->token = P->token->next;
+	TreeNode* node = malloc(sizeof(TreeNode));
+	make_sure(P, TOK_SEMICOLON, "expected ';' after token 'break'");
+	node->type = NODE_BREAK;
+	P->token = P->token->next;
+	append(P, node);
+}
+
+static void
+parse_continue(ParseState* P) {
+	/* starts on token BREAK */
+	P->token = P->token->next;
+	TreeNode* node = malloc(sizeof(TreeNode));
+	make_sure(P, TOK_SEMICOLON, "expected ';' after token 'continue'");
+	node->type = NODE_CONTINUE;
+	P->token = P->token->next;
+	append(P, node);
+}
+
 static void 
 parse_if(ParseState* P) {
 	/* starts on token IF */
@@ -1335,7 +1409,7 @@ parse_if(ParseState* P) {
 	/* mark the end of the condition */
 	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR); 
 	/* parse the condition */
-	node->ifval->condition = expression_to_tree(P);
+	node->ifval->condition = parse_expression(P);
 	node->ifval->child = NULL;
 	P->token = P->token->next;
 	append(P, node);
@@ -1353,7 +1427,7 @@ parse_while(ParseState* P) {
 	/* mark the end of the condition */
 	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR); 
 	/* parse the condition */
-	node->whileval->condition = expression_to_tree(P);
+	node->whileval->condition = parse_expression(P);
 	node->whileval->child = NULL;
 	P->token = P->token->next;
 	append(P, node);
@@ -1371,15 +1445,15 @@ parse_for(ParseState* P) {
 	node->forval->child = NULL;
 	/* initializer ends with a semicolon */
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
-	node->forval->initializer = expression_to_tree(P);
+	node->forval->initializer = parse_expression(P);
 	P->token = P->token->next;
 	/* condition ends with a semicolon */
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
-	node->forval->condition = expression_to_tree(P);
+	node->forval->condition = parse_expression(P);
 	P->token = P->token->next;
 	/* statements ends with a closing parenthesis */
 	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR);
-	node->forval->statement = expression_to_tree(P);	
+	node->forval->statement = parse_expression(P);	
 	P->token = P->token->next;
 	append(P, node);
 }
@@ -1479,6 +1553,15 @@ generate_tree(LexState* L, ParseOptions* options) {
 				break;
 			case TOK_FOR:
 				parse_for(P);
+				break;
+			case TOK_RETURN:
+				parse_return(P);
+				break;
+			case TOK_BREAK:
+				parse_break(P);
+				break;
+			case TOK_CONTINUE:
+				parse_continue(P);
 				break;
 			case TOK_OPENCURL:
 				parse_block(P);
