@@ -106,7 +106,18 @@ static const int optimizable[255] = {
 	[TOK_LT] = 1,
 	[TOK_GE] = 1,
 	[TOK_LE] = 1,
-	[TOK_EQ] = 1
+	[TOK_EQ] = 1,
+	[TOK_ASSIGN] = 1,
+	[TOK_INCBY] = 1,
+	[TOK_DECBY] = 1,
+	[TOK_MULBY] = 1,
+	[TOK_DIVBY] = 1,
+	[TOK_MODBY] = 1,
+	[TOK_SHLBY] = 1,
+	[TOK_SHRBY] = 1,
+	[TOK_ANDBY] = 1,
+	[TOK_ORBY] = 1,
+	[TOK_XORBY] = 1
 };
 
 /* called by parse_error and make_sure */
@@ -363,7 +374,7 @@ static void
 print_datatype(TreeType* type) {
 	for (int i = 0; i < 4; i++) {
 		if ((type->modifier >> i) & 0x1) {
-			printf("%s ", modifiers[i]);
+			printf("%s ", modifiers[i].identifier);
 		}
 	}
 	printf("%s", type->type_name);
@@ -673,6 +684,7 @@ tree_datatype(ParseState* P, ExpNode* tree) {
 	} else if (tree->type == EXP_BYTE) {
 		return P->type_byte;
 	}
+	return NULL;
 }
 
 static void
@@ -703,11 +715,51 @@ optimize_branching(ParseState* P, TreeNode* node) {
 			if (node->ifval->condition->type == EXP_INTEGER 
 				|| node->ifval->condition->type == EXP_FLOAT
 			) {	
-				/* it's optimizable */
-				if (!(uint64_t)node->ifval->condition->ival) {
-				
+				TreeNode* parent = node->parent;	
+				/* TODO make a remove_from_parent function */
+				/* condition is 1, remove test */
+				if (*(uint64_t *)&node->ifval->condition->ival) {
+					switch (parent->type) {
+						case NODE_IF:
+							parent->ifval->child = node->ifval->child;
+							break;	
+						case NODE_WHILE:
+							parent->whileval->child = node->whileval->child;
+							break;	
+						case NODE_BLOCK: {
+						}
+					}
+				/* condition is 0, remove completely */
+				} else {
+					switch (parent->type) {
+						case NODE_IF:
+							parent->ifval->child = NULL;	
+							break;
+						case NODE_WHILE:
+							parent->whileval->child = NULL;
+							break;
+						case NODE_BLOCK: {
+							TreeNode* i;
+							for (i = parent->blockval->child; i && i != node; i = i->next);
+							if (i->prev) {
+								if (i->next) {
+									i->prev->next = i->next;
+								} else {
+									i->prev->next = NULL;
+								}
+							} else {
+								if (i->next) {
+									parent->blockval->child = i->next;
+								} else {
+									parent->blockval->child = NULL;
+								}
+							}
+							break;
+						}
+					}
 				}
 			}
+			optimize_branching(P, node->ifval->child);
 			break;
 	}
 }
@@ -893,6 +945,8 @@ expression_to_tree(ParseState* P) {
 		[TOK_MULBY]			= {2, ASSOC_RIGHT, OP_BINARY},
 		[TOK_DIVBY]			= {2, ASSOC_RIGHT, OP_BINARY},
 		[TOK_MODBY]			= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_SHLBY]			= {2, ASSOC_RIGHT, OP_BINARY},
+		[TOK_SHRBY]			= {2, ASSOC_RIGHT, OP_BINARY},
 		[TOK_ANDBY]			= {2, ASSOC_RIGHT, OP_BINARY},
 		[TOK_ORBY]			= {2, ASSOC_RIGHT, OP_BINARY},
 		[TOK_XORBY]			= {2, ASSOC_RIGHT, OP_BINARY},
@@ -1233,30 +1287,34 @@ parse_function(ParseState* P) {
 	/* also no need to make sure we're on "(" */
 	P->token = P->token->next;
 	/* now we're either on an argument list or a ")" */
-	while (matches_declaration(P)) {
-		TreeVariable* arg = parse_declaration(P);
-		TreeVariableList* list = malloc(sizeof(TreeVariableList));
-		list->variable = arg;
-		list->next = NULL;
-		/* append the arg to list of params */
-		if (!node->funcval->params) {
-			node->funcval->params = list;
-		} else {
-			TreeVariableList* i;
-			for (i = node->funcval->params; i->next; i = i->next);
-			i->next = list;
-		}
-		if (!P->token) {
-			parse_error(P, "unexpected EOF while parsing function argument list");
-		}
-		if (P->token->type == TOK_CLOSEPAR) {
-			P->token = P->token->next;
-			break;
-		}
-		if (P->token->type != TOK_COMMA) {
-			parse_error(P, "expected ',' or ')' to follow declaration of argument '%s'", arg->identifier);
-		}
+	if (P->token->type == TOK_CLOSEPAR) {
 		P->token = P->token->next;
+	} else {
+		while (matches_declaration(P)) {
+			TreeVariable* arg = parse_declaration(P);
+			TreeVariableList* list = malloc(sizeof(TreeVariableList));
+			list->variable = arg;
+			list->next = NULL;
+			/* append the arg to list of params */
+			if (!node->funcval->params) {
+				node->funcval->params = list;
+			} else {
+				TreeVariableList* i;
+				for (i = node->funcval->params; i->next; i = i->next);
+				i->next = list;
+			}
+			if (!P->token) {
+				parse_error(P, "unexpected EOF while parsing function argument list");
+			}
+			if (P->token->type == TOK_CLOSEPAR) {
+				P->token = P->token->next;
+				break;
+			}
+			if (P->token->type != TOK_COMMA) {
+				parse_error(P, "expected ',' or ')' to follow declaration of argument '%s'", arg->identifier);
+			}
+			P->token = P->token->next;
+		}
 	}
 	make_sure(P, TOK_ARROW, "expected token '->' to follow function argument list");
 	P->token = P->token->next;
@@ -1382,6 +1440,15 @@ generate_tree(LexState* L, ParseOptions* options) {
 	type_byte->modifier = 0;
 	P->type_byte = type_byte;
 	register_datatype(P, type_byte);
+
+	/* establish void type */
+	TreeType* type_void = malloc(sizeof(TreeType));
+	type_void->type_name = "void";
+	type_void->plevel = 0;
+	type_void->size = 0;
+	type_void->modifier = 0;
+	P->type_void = type_void;
+	register_datatype(P, type_void);
 
 	/* establish the root block */
 	TreeNode* root = malloc(sizeof(TreeNode));

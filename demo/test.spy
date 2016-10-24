@@ -1,9 +1,6 @@
-some_function: static(arg_0: float, arg_1: const int^) -> int^^ {
-	local_a: int;
-	local_b: byte^;
-	local_c: int;
-
-	local_c = local_a + (int)local_b * 42;
-	local_c = &local_a * ;
+{	
+	if (0)
+		x = x + 1;
+	if (1 + x)
+		x = x + 1;
 }
-

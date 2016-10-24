@@ -25,12 +25,12 @@ typedef struct TreeVariableList TreeVariableList;
 typedef enum TreeNodeType TreeNodeType;
 
 enum TreeNodeType {
-	NODE_IF,
-	NODE_FOR,
-	NODE_WHILE,
-	NODE_STATEMENT,
-	NODE_BLOCK,
-	NODE_FUNCTION
+	NODE_IF = 1,
+	NODE_FOR = 2,
+	NODE_WHILE = 3,
+	NODE_STATEMENT = 4,
+	NODE_BLOCK = 5,
+	NODE_FUNCTION = 6
 };
 
 struct TreeType {
@@ -178,6 +178,7 @@ struct ParseState {
 	const TreeType* type_integer;
 	const TreeType* type_float;
 	const TreeType* type_byte;
+	const TreeType* type_void;
 };
 
 ParseState* generate_tree(LexState*, ParseOptions*);
