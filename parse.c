@@ -16,33 +16,28 @@ typedef struct ExpStack ExpStack;
 typedef struct OperatorInfo OperatorInfo;
 typedef struct ModifierInfo ModifierInfo;
 
-static TreeType* parse_datatype(ParseState*);
-static ExpNode* parse_expression(ParseState*);
+/* debug functions */
+static void print_datatype(TreeType*);
+static void print_declaration(TreeVariable*);
+static void print_node(TreeNode*, int);
+static void print_expression(ExpNode*, int);
+static void parse_error(ParseState*, const char*, ...); 
+static void parse_die(ParseState*, const char*, va_list);
+
+/* optimization functions */
 static void optimize_branching(ParseState*, TreeNode*);
 static void optimize_tree_arith(ParseState*, ExpNode*);
 static int optimize_arith_available(ParseState*, ExpNode*);
-static void print_node(TreeNode*, int);
-static void print_expression(ExpNode*, int);
-static Token* token(ParseState*);
-static int on(ParseState*, int, ...);
-static void next(ParseState*, int);
-static void register_datatype(ParseState*, TreeType*);
-static void register_local(ParseState*, TreeVariable*);
-static TreeType* get_datatype(ParseState*, const char*);
+
+/* functions that tell you whether or not you're looking
+ * at a certain type of expression */
 static int matches_datatype(ParseState*);
 static int matches_declaration(ParseState*);
 static int matches_function(ParseState*);
-static void make_sure(ParseState*, TokenType, const char*, ...);
-static void print_datatype(TreeType*);
-static void print_declaration(TreeVariable*);
-static void mark_expression(ParseState*, TokenType, TokenType);
-static TreeNode* new_node(ParseState*, TreeNodeType);
-static void append(ParseState*, TreeNode*);
-static int is_keyword(const char*);
-static int get_modifier(const char*);
-static Token* peek(ParseState*, int);
-static void typcheck_tree(ParseState*, ExpNode*);
 
+/* parsing functions */
+static TreeType* parse_datatype(ParseState*);
+static ExpNode* parse_expression(ParseState*);
 static TreeNode* parse_statement(ParseState*);
 static TreeVariable* parse_declaration(ParseState*);
 static void parse_if(ParseState*);
@@ -53,13 +48,28 @@ static void parse_return(ParseState*);
 static void parse_break(ParseState*);
 static void parse_continue(ParseState*);
 
+/* expression stack functions */
 static void expstack_push(ExpStack*, ExpNode*);
 static void expstack_print(ExpStack*);
 static ExpNode* expstack_pop(ExpStack*);
 static ExpNode* expstack_top(ExpStack*);
 static char* expstack_tostring(ExpStack*);
 
-static void parse_error(ParseState*, const char*, ...); 
+/* misc functions */
+static Token* token(ParseState*);
+static int on(ParseState*, int, ...);
+static void next(ParseState*, int);
+static void register_datatype(ParseState*, TreeType*);
+static void register_local(ParseState*, TreeVariable*);
+static TreeType* get_datatype(ParseState*, const char*);
+static void make_sure(ParseState*, TokenType, const char*, ...);
+static void mark_expression(ParseState*, TokenType, TokenType);
+static TreeNode* new_node(ParseState*, TreeNodeType);
+static void append(ParseState*, TreeNode*);
+static int is_keyword(const char*);
+static int get_modifier(const char*);
+static Token* peek(ParseState*, int);
+static void typcheck_tree(ParseState*, ExpNode*);
 
 struct OperatorInfo {
 	unsigned int pres;
@@ -655,6 +665,35 @@ append(ParseState* P, TreeNode* node) {
 		node->parent = P->current_block;
 		node->next = NULL;
 	}
+	/* here is where we make sure that return is only used inside of a function
+	 * and that continue and break are only used inside of loops */
+	if (node->type == NODE_RETURN) {
+		int found_func = 0;
+		for (TreeNode* i = node->parent; i; i = i->parent) {
+			if (i->type == NODE_FUNCTION) {
+				found_func = 1;
+				break;
+			}
+		}
+		if (!found_func) {
+			parse_error(P, "attempt to use 'return' outside of a function");
+		}
+	} else if (node->type == NODE_CONTINUE || node->type == NODE_BREAK) {
+		int found_loop = 0;
+		for (TreeNode* i = node->parent; i; i = i->parent) {
+			if (i->type == NODE_WHILE || i->type == NODE_FOR) {
+				found_loop = 1;
+				break;
+			}
+		}
+		if (!found_loop) {
+			parse_error(
+				P, 
+				"attempt to use '%s' outside of a loop",
+				node->type == NODE_CONTINUE ? "continue" : "break"	
+			);
+		}
+	}
 	if (node->type == NODE_IF 
 		|| node->type == NODE_WHILE 
 		|| node->type == NODE_FOR
@@ -720,6 +759,8 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
  * }
  * will not test the condition
  */
+
+/* TODO FIX THIS, DOESN'T WORK IN ALL CASES!!!! */
 static void
 optimize_branching(ParseState* P, TreeNode* node) {
 	if (!node) return;
@@ -1010,7 +1051,9 @@ parse_expression(ParseState* P) {
 		[TOK_UPCARROT]		= {10, ASSOC_RIGHT, OP_UNARY},
 		[TOK_EXCL]			= {10, ASSOC_RIGHT, OP_UNARY},
 		[TOK_CAST]			= {10, ASSOC_RIGHT, OP_UNARY},
-		[TOK_PERIOD]		= {11, ASSOC_LEFT, OP_BINARY}
+		[TOK_PERIOD]		= {11, ASSOC_LEFT, OP_BINARY},
+		[TOK_INC]			= {11, ASSOC_LEFT, OP_UNARY},
+		[TOK_DEC]			= {11, ASSOC_LEFT, OP_UNARY}
 	};
 
 	for (; P->token && P->token != P->end_mark; P->token = P->token->next) {
@@ -1234,6 +1277,10 @@ jump_out(ParseState* P) {
 		return;
 	}
 	do {
+		/* get rid of current function on jump-out */
+		if (block->type == NODE_FUNCTION) {
+			P->current_function = NULL;
+		}
 		block = block->parent;
 	} while (block && block->type != NODE_BLOCK);
 	if (!block) {
@@ -1310,6 +1357,9 @@ parse_declaration(ParseState* P) {
 
 static void
 parse_function(ParseState* P) {
+	if (P->current_function) {
+		parse_error(P, "attempt to declare one function inside of another");
+	}
 	/* expects to be on the function identifier */
 	TreeNode* node = malloc(sizeof(TreeNode));
 	node->type = NODE_FUNCTION;
@@ -1360,11 +1410,28 @@ parse_function(ParseState* P) {
 	P->token = P->token->next;
 	node->funcval->return_type = parse_datatype(P);
 	P->current_function = node;
+	/* it is valid to declare a function like you would a math function, e.g.
+	 * square: (n: int) -> int = n * n;
+	 */
 	append(P, node);
+	if (P->token->type == TOK_ASSIGN) {
+		/* check if it's a 'short' function */
+		P->token = P->token->next;
+		TreeNode* ret = malloc(sizeof(TreeNode));
+		ret->type = NODE_RETURN;
+		mark_expression(P, TOK_NULL, TOK_SEMICOLON);
+		ret->stateval = parse_expression(P);
+		P->token = P->token->next;
+		append(P, ret);
+		/* set current function back to NULL because were
+		 * already finished parsing this function body */
+		P->current_function = NULL;
+	}
 }
 
 static void
 parse_return(ParseState* P) {
+	/* no need to check if we're inside of a function... append does that */
 	/* starts on token RETURN */
 	P->token = P->token->next;
 	TreeNode* node = malloc(sizeof(TreeNode));
@@ -1430,6 +1497,7 @@ parse_while(ParseState* P) {
 	node->whileval->condition = parse_expression(P);
 	node->whileval->child = NULL;
 	P->token = P->token->next;
+	P->current_loop = node;
 	append(P, node);
 }
 
@@ -1455,6 +1523,7 @@ parse_for(ParseState* P) {
 	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR);
 	node->forval->statement = parse_expression(P);	
 	P->token = P->token->next;
+	P->current_loop = node;
 	append(P, node);
 }
 
@@ -1482,6 +1551,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 	P->token = L->tokens;
 	P->end_mark = NULL;	
 	P->current_function = NULL;
+	P->current_loop = NULL;
 	P->to_append = NULL;
 	P->defined_types = malloc(sizeof(TreeTypeList));
 	P->defined_types->next = NULL;
@@ -1543,6 +1613,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 			continue;
 		} else if (matches_function(P)) {
 			parse_function(P);
+			continue;
 		}
 		switch (P->token->type) {
 			case TOK_IF:

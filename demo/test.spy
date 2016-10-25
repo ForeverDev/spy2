@@ -1,5 +1,1 @@
-x: (n: int) -> int {
-	return n * n;
-	continue;
-	break;
-}
+for (i = 0; i < 100; i++) i += 32 << 6;

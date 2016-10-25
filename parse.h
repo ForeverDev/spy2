@@ -176,6 +176,7 @@ struct ParseState {
 	TreeNode* to_append;
 	TreeNode* current_block;
 	TreeNode* current_function;
+	TreeNode* current_loop;
 	TreeNode* root_block;
 	ParseOptions* options;
 	const TreeType* type_integer;
