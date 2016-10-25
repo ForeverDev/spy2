@@ -1,1 +1,1 @@
-for (i = 0; i < 100; i++) i += 32 << 6;
+factorial: (n: int) -> int;

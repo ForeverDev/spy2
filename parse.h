@@ -100,6 +100,8 @@ struct TreeBlock {
 struct TreeFunction {
 	char* identifier;
 	uint32_t modifiers;
+	int implemented;
+	int nparams;
 	TreeVariableList* params;
 	TreeType* return_type;	
 	TreeNode* child;

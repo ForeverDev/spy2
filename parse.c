@@ -10,7 +10,8 @@
 #define MOD_STATIC (0x1 << 0)
 #define MOD_CONST (0x1 << 1)
 #define MOD_VOLATILE (0x1 << 2)
-#define MOD_COUNT 3
+#define MOD_CFUNC (0x1 << 3)
+#define MOD_COUNT 4
 
 typedef struct ExpStack ExpStack;
 typedef struct OperatorInfo OperatorInfo;
@@ -70,6 +71,8 @@ static int is_keyword(const char*);
 static int get_modifier(const char*);
 static Token* peek(ParseState*, int);
 static void typcheck_tree(ParseState*, ExpNode*);
+static int exact_datatype(TreeType*, TreeType*);
+static char* tostring_datatype(TreeType*);
 
 struct OperatorInfo {
 	unsigned int pres;
@@ -96,15 +99,16 @@ struct ExpStack {
 	ExpStack* prev;
 };
 
-static const ModifierInfo modifiers[3] = {
+static const ModifierInfo modifiers[4] = {
 	{"static", MOD_STATIC},
 	{"const", MOD_CONST},
-	{"volatile", MOD_VOLATILE}
+	{"volatile", MOD_VOLATILE},
+	{"cfunc", MOD_CFUNC}
 };
 
 static const char* keywords[32] = {
 	"if", "for", "while", "func", "return",
-	"continue", "break", "cfunc"
+	"continue", "break"
 };
 
 /* list of operators that can be optimized */
@@ -191,6 +195,14 @@ is_keyword(const char* word) {
 		}
 	}
 	return 0;
+}
+
+static int
+exact_datatype(TreeType* a, TreeType* b) {
+	if (strcmp(a->type_name, b->type_name)) return 0;
+	if (a->modifier != b->modifier) return 0;
+	if (a->plevel != b->plevel) return 0;
+	return 1;
 }
 	
 static void
@@ -383,17 +395,27 @@ get_datatype(ParseState* P, const char* type_name) {
 	return NULL;
 }
 
-static void
-print_datatype(TreeType* type) {
+static char*
+tostring_datatype(TreeType* type) {
+	char* buf = calloc(1, 256);
 	for (int i = 0; i < 4; i++) {
 		if ((type->modifier >> i) & 0x1) {
-			printf("%s ", modifiers[i].identifier);
+			sprintf(buf + strlen(buf), "%s ", modifiers[i].identifier);
 		}
 	}
-	printf("%s", type->type_name);
+	sprintf(buf + strlen(buf), "%s", type->type_name);
 	for (int i = 0; i < type->plevel; i++) {
-		printf("^");	
+		sprintf(buf + strlen(buf), "^");	
 	}
+	return buf;
+}
+
+static void
+print_datatype(TreeType* type) {
+	char* buf = tostring_datatype(type);
+	printf("%s", buf);
+	free(buf);
+	return;
 }
 
 static void
@@ -697,7 +719,7 @@ append(ParseState* P, TreeNode* node) {
 	if (node->type == NODE_IF 
 		|| node->type == NODE_WHILE 
 		|| node->type == NODE_FOR
-		|| node->type == NODE_FUNCTION
+		|| (node->type == NODE_FUNCTION && node->funcval->implemented)
 	) {
 		P->to_append = node;
 	} else {
@@ -1307,6 +1329,9 @@ parse_datatype(ParseState* P) {
 	do {
 		found = 0;
 		unsigned int mod = get_modifier(P->token->word);
+		if (mod == MOD_CFUNC) {
+			parse_error(P, "modifier 'cfunc' can only be used in function declarations");
+		}
 		if (mod) {
 			if (type->modifier & mod) {
 				parse_error(P, "duplicate modifier '%s' in variable declaration", P->token->word);
@@ -1357,8 +1382,23 @@ parse_declaration(ParseState* P) {
 
 static void
 parse_function(ParseState* P) {
-	if (P->current_function) {
-		parse_error(P, "attempt to declare one function inside of another");
+	if (P->current_block != P->root_block) {
+		parse_error(P, "functions can only be declared in the main scope");
+	}
+	/* we're currently on the identifier of the function... scan through
+	 * the main block and make sure the funciton hasn't been implemented yet */
+	TreeNode* decl = NULL;
+	for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
+		if (i->type != NODE_FUNCTION) continue;
+		if (!strcmp(i->funcval->identifier, P->token->word)) {
+			if (i->funcval->implemented) {
+				parse_error(P, "attempt to re-implement function '%s'", P->token->word);
+			} else {
+				/* otherwise it's not implemented and we want to copy data to this function */
+				decl = i;
+				break;
+			}
+		}
 	}
 	/* expects to be on the function identifier */
 	TreeNode* node = malloc(sizeof(TreeNode));
@@ -1366,6 +1406,7 @@ parse_function(ParseState* P) {
 	node->funcval = malloc(sizeof(TreeFunction));
 	node->funcval->identifier = malloc(strlen(P->token->word) + 1);
 	node->funcval->params = NULL;
+	node->funcval->nparams = 0;
 	strcpy(node->funcval->identifier, P->token->word);
 	P->token = P->token->next->next;
 	/* no need to make sure we're on a semicolon, matches_function() already did that */
@@ -1377,43 +1418,105 @@ parse_function(ParseState* P) {
 	/* also no need to make sure we're on "(" */
 	P->token = P->token->next;
 	/* now we're either on an argument list or a ")" */
-	if (P->token->type == TOK_CLOSEPAR) {
-		P->token = P->token->next;
-	} else {
-		while (matches_declaration(P)) {
-			TreeVariable* arg = parse_declaration(P);
-			TreeVariableList* list = malloc(sizeof(TreeVariableList));
-			list->variable = arg;
-			list->next = NULL;
-			/* append the arg to list of params */
-			if (!node->funcval->params) {
-				node->funcval->params = list;
-			} else {
-				TreeVariableList* i;
-				for (i = node->funcval->params; i->next; i = i->next);
-				i->next = list;
-			}
-			if (!P->token) {
-				parse_error(P, "unexpected EOF while parsing function argument list");
-			}
-			if (P->token->type == TOK_CLOSEPAR) {
-				P->token = P->token->next;
-				break;
-			}
-			if (P->token->type != TOK_COMMA) {
-				parse_error(P, "expected ',' or ')' to follow declaration of argument '%s'", arg->identifier);
-			}
-			P->token = P->token->next;
+	while (P->token->type != TOK_CLOSEPAR) {
+		node->funcval->nparams++;
+		TreeVariable* arg = parse_declaration(P);
+		TreeVariableList* list = malloc(sizeof(TreeVariableList));
+		list->variable = arg;
+		list->next = NULL;
+		/* append the arg to list of params */
+		if (!node->funcval->params) {
+			node->funcval->params = list;
+		} else {
+			TreeVariableList* i;
+			for (i = node->funcval->params; i->next; i = i->next);
+			i->next = list;
 		}
+		if (!P->token) {
+			parse_error(P, "unexpected EOF while parsing function argument list");
+		}
+		if (P->token->type == TOK_CLOSEPAR) {
+			P->token = P->token->next;
+			break;
+		}
+		if (P->token->type != TOK_COMMA) {
+			parse_error(P, "expected ',' or ')' to follow declaration of argument '%s'", arg->identifier);
+		}
+		P->token = P->token->next;
 	}
 	make_sure(P, TOK_ARROW, "expected token '->' to follow function argument list");
 	P->token = P->token->next;
 	node->funcval->return_type = parse_datatype(P);
+	/* if decl isn't NULL, the function was previously declared but
+	 * not implemented... so, we want to make sure that the functions
+	 * match each other and we want to replace decl in the list of nodes */
+	if (decl) {
+		TreeVariableList* arg_decl = decl->funcval->params;
+		TreeVariableList* arg_impl = node->funcval->params;
+		int at_param = 0;
+		do {
+			at_param++;
+			if (!exact_datatype(arg_decl->variable->datatype, arg_impl->variable->datatype)) {
+				parse_error(
+					P, 
+					"implementation of function '%s' doesn't match its declaration... "
+					"argument #%d: expected type (%s) but got type (%s)",
+					node->funcval->identifier,
+					at_param,
+					tostring_datatype(arg_decl->variable->datatype),
+					tostring_datatype(arg_impl->variable->datatype)
+				);
+			}
+			arg_decl = arg_decl->next;
+			arg_impl = arg_impl->next;
+		} while (arg_decl && arg_impl);
+		/* thank god C has a logical XOR operator, right? */
+		if ((!arg_decl && arg_impl) || (arg_decl && !arg_impl)) {
+			parse_error(
+				P,
+				"implementation of function '%s' doesn't have the same number of parameters "
+				"its declaration.  Expected %d parameters, got %d",
+				node->funcval->identifier,
+				decl->funcval->nparams,
+				at_param
+			);
+		}
+		if (!exact_datatype(decl->funcval->return_type, node->funcval->return_type)) {
+			parse_error(
+				P,
+				"return type of function '%s' doesn't match its declaration, expected return type "
+				"(%s), got (%s)",
+				node->funcval->identifier,
+				tostring_datatype(decl->funcval->return_type),
+				tostring_datatype(node->funcval->return_type)
+			);
+			parse_error(P, "incorrect return type");
+		}
+
+	}
+	/* if we're on a semicolon, it's a function declaration, not implementation */
+	node->funcval->implemented = P->token->type != TOK_SEMICOLON;
+	if (!node->funcval->implemented && decl) {
+		parse_error(P, "attempt to re-declare function '%s'", node->funcval->identifier);
+	}
+	if (!node->funcval->implemented) {
+		node->funcval->child = NULL;
+		P->token = P->token->next;
+		append(P, node);
+		return;
+	}
 	P->current_function = node;
 	/* it is valid to declare a function like you would a math function, e.g.
 	 * square: (n: int) -> int = n * n;
 	 */
 	append(P, node);
+	/* now we're free to remove decl from the list */
+	if (decl->prev) {
+		decl->prev->next = decl->next;
+	} else {
+		P->root_block->blockval->child = decl->next;
+	}
+	free(decl);
 	if (P->token->type == TOK_ASSIGN) {
 		/* check if it's a 'short' function */
 		P->token = P->token->next;
