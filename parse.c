@@ -18,7 +18,7 @@ typedef struct OperatorInfo OperatorInfo;
 typedef struct ModifierInfo ModifierInfo;
 
 /* debug functions */
-static void print_datatype(TreeType*);
+static void print_datatype(const TreeType*);
 static void print_declaration(TreeVariable*);
 static void print_node(TreeNode*, int);
 static void print_expression(ExpNode*, int);
@@ -35,12 +35,14 @@ static int optimize_arith_available(ParseState*, ExpNode*);
 static int matches_datatype(ParseState*);
 static int matches_declaration(ParseState*);
 static int matches_function(ParseState*);
+static int matches_struct(ParseState*);
 
 /* parsing functions */
 static TreeType* parse_datatype(ParseState*);
 static ExpNode* parse_expression(ParseState*);
 static TreeNode* parse_statement(ParseState*);
 static TreeVariable* parse_declaration(ParseState*);
+static TreeType* parse_struct(ParseState*);
 static void parse_if(ParseState*);
 static void parse_while(ParseState*);
 static void parse_for(ParseState*);
@@ -69,10 +71,11 @@ static TreeNode* new_node(ParseState*, TreeNodeType);
 static void append(ParseState*, TreeNode*);
 static int is_keyword(const char*);
 static int get_modifier(const char*);
+static TreeVariable* get_local(ParseState*, const char*);
 static Token* peek(ParseState*, int);
-static void typcheck_tree(ParseState*, ExpNode*);
-static int exact_datatype(TreeType*, TreeType*);
-static char* tostring_datatype(TreeType*);
+static const TreeType* typecheck_expression(ParseState*, ExpNode*);
+static int exact_datatype(const TreeType*, const TreeType*);
+static char* tostring_datatype(const TreeType*);
 
 struct OperatorInfo {
 	unsigned int pres;
@@ -198,7 +201,7 @@ is_keyword(const char* word) {
 }
 
 static int
-exact_datatype(TreeType* a, TreeType* b) {
+exact_datatype(const TreeType* a, const TreeType* b) {
 	if (strcmp(a->type_name, b->type_name)) return 0;
 	if (a->modifier != b->modifier) return 0;
 	if (a->plevel != b->plevel) return 0;
@@ -396,7 +399,7 @@ get_datatype(ParseState* P, const char* type_name) {
 }
 
 static char*
-tostring_datatype(TreeType* type) {
+tostring_datatype(const TreeType* type) {
 	char* buf = calloc(1, 256);
 	for (int i = 0; i < 4; i++) {
 		if ((type->modifier >> i) & 0x1) {
@@ -411,7 +414,7 @@ tostring_datatype(TreeType* type) {
 }
 
 static void
-print_datatype(TreeType* type) {
+print_datatype(const TreeType* type) {
 	char* buf = tostring_datatype(type);
 	printf("%s", buf);
 	free(buf);
@@ -571,7 +574,7 @@ print_expression(ExpNode* tree, int indent) {
 			printf("%lld\n", tree->ival);
 			break;
 		case EXP_FLOAT:
-			printf("%lf\n", tree->fval);
+			printf("%f\n", tree->fval);
 			break;
 		case EXP_IDENTIFIER:
 			printf("%s\n", tree->idval);
@@ -587,6 +590,21 @@ print_expression(ExpNode* tree, int indent) {
 			print_expression(tree->cval->operand, indent + 1);
 			break;
 	}
+}
+
+/* tells whether or not the parser is looking at a struct declaration */
+static int
+matches_struct(ParseState* P) {
+	Token* at = P->token;
+	if (!at || at->type != TOK_IDENTIFIER) return 0;
+	at = at->next;
+	if (!at || at->type != TOK_COLON) return 0;
+	at = at->next;
+	while (at && get_modifier(at->word)) {
+		at = at->next;
+	}
+	if (!at || at->type != TOK_STRUCT) return 0;
+	return 1;
 }
 
 /* tells whether or not the parser is looking at a function definition */
@@ -766,9 +784,118 @@ tree_datatype(ParseState* P, ExpNode* tree) {
 	return NULL;
 }
 
-static void
+/* completely validates an expression tree and returns its type */
+static const TreeType*
 typecheck_expression(ParseState* P, ExpNode* tree) {
-	
+	switch (tree->type) {
+		case EXP_INTEGER:
+			return P->type_integer;
+		case EXP_FLOAT:
+			return P->type_float;
+		case EXP_BYTE:
+			return P->type_byte;	
+		case EXP_CAST: 
+			/* no need to do anything with return value because it's a cast */
+			typecheck_expression(P, tree->cval->operand);
+			return tree->cval->datatype;
+		case EXP_BINOP:
+			switch (tree->bval->type) {
+				case TOK_PLUS:
+				case TOK_HYPHON:
+				case TOK_ASTER:
+				case TOK_FORSLASH:
+				case TOK_GT:
+				case TOK_GE:
+				case TOK_LT:
+				case TOK_LE:
+				case TOK_ASSIGN:
+				case TOK_INCBY:
+				case TOK_DECBY:
+				case TOK_MULBY:
+				case TOK_DIVBY: {
+					const TreeType* a = typecheck_expression(P, tree->bval->left);
+					const TreeType* b = typecheck_expression(P, tree->bval->right);
+					if (!exact_datatype(a, b)) {
+						parse_error(
+							P,
+							"attempt to perform arithmetic (with operator '%s') on on-matching types (%s) and (%s)",
+							tt_to_word(tree->bval->type),
+							tostring_datatype(a),
+							tostring_datatype(b)
+						);
+					}
+					/* both types are identical, just return a */
+					return a;
+				}
+				case TOK_SHL:
+				case TOK_SHR:
+				case TOK_SHLBY:
+				case TOK_SHRBY:
+				case TOK_MODBY:
+				case TOK_ANDBY:
+				case TOK_ORBY:
+				case TOK_XORBY: {
+					const TreeType* a = typecheck_expression(P, tree->bval->left);
+					const TreeType* b = typecheck_expression(P, tree->bval->right);
+					/* in bitwise operators, both operands must be integers (or pointers) */
+					if (
+						(strcmp(a->type_name, "int") && a->plevel == 0) 
+						|| (strcmp(b->type_name, "int") && b->plevel == 0)
+					) {
+						parse_error(
+							P,
+							"operands of operator '%s' must be integers, got (%s) and (%s) respectively",
+							tt_to_word(tree->bval->type),
+							tostring_datatype(a),
+							tostring_datatype(b)
+						);
+					}
+					return a;
+				}
+				case TOK_PERIOD: {
+					ExpNode* left = tree->bval->left;
+					ExpNode* right = tree->bval->right;
+					if (right->type != EXP_IDENTIFIER) {
+						parse_error(P, "the right operand of the '.' operator must be an identifier");
+					}
+					/* if the left side is an identifier, it must be a local */
+					const TreeType* type_struct; /* the struct being indexed */
+					if (left->type == EXP_IDENTIFIER) {
+						TreeVariable* var = get_local(P, left->idval);
+						if (!var) {
+							parse_error(P, "undeclared identifier '%s'", left->idval);
+						}
+						if (!var->datatype->sval) {
+							parse_error(P, "attempt to use the '.' operator on non-struct variable '%s'", left->idval);
+						}
+						type_struct = var->datatype; 
+					} else if (left->type == EXP_BINOP && left->bval->type == TOK_PERIOD) {
+						type_struct = typecheck_expression(P, left);
+					}
+					if (!type_struct || !type_struct->sval) {
+						parse_error(P, "attempt to use the '.' operator on something that isn't a struct");
+					}
+					TreeVariable* field = NULL;
+					for (TreeVariableList* i = type_struct->sval->fields; i; i = i->next) {
+						if (!strcmp(i->variable->identifier, right->idval)) {
+							field = i->variable;
+							break;
+						}
+					}
+					if (!field) {
+						parse_error(P, "'%s' isn't a valid field of struct '%s'", right->idval, type_struct->type_name);
+					}
+					if (field->datatype->plevel > 0) {
+						parse_error(P, "attempt to use the '.' operator on a pointer");
+					}		
+					return field->datatype;
+				}
+			}
+			case EXP_IDENTIFIER:
+				return P->type_integer;	
+			
+	}
+	return NULL;
 }
 
 /* optimizes trivial branching, e.g.
@@ -889,13 +1016,23 @@ optimize_arith_available(ParseState* P, ExpNode* tree) {
 			}
 			return 0;
 		}
-		case EXP_UNOP: {
+		case EXP_UNOP: { 
 			ExpNode* operand = tree->uval->operand;
 			if (!optimizable[tree->uval->type]) {
 				return 0;
 			}
 			if (operand->type == EXP_INTEGER || operand->type == EXP_FLOAT) {
 				return 1;
+			}
+			if (operand->type == EXP_BINOP || operand->type == EXP_UNOP) {
+				return optimize_arith_available(P, operand);
+			}
+			return 0;
+		}
+		case EXP_CAST: {
+			ExpNode* operand = tree->cval->operand;
+			if (operand->type == EXP_INTEGER || operand->type == EXP_FLOAT) {
+				return 0;
 			}
 			if (operand->type == EXP_BINOP || operand->type == EXP_UNOP) {
 				return optimize_arith_available(P, operand);
@@ -977,7 +1114,36 @@ optimize_tree_arith(ParseState* P, ExpNode* tree) {
 				}
 			/* condense float arithmetic */
 			} else {
+				switch (tree->bval->type) {
+					case TOK_PLUS:
+						new->fval = left->fval + right->fval;
+						break;	
+					case TOK_ASTER:
+						new->fval = left->fval * right->fval;
+						break;
+					case TOK_FORSLASH:
+						new->fval = left->fval / right->fval;
+						break;
+					case TOK_HYPHON:
+						new->fval = left->fval - right->fval;
+						break;
+					case TOK_GT:
+						new->fval = left->fval > right->fval;
+						break;
+					case TOK_LT:
+						new->fval = left->fval < right->fval;
+						break;
+					case TOK_GE:
+						new->fval = left->fval >= right->fval;
+						break;
+					case TOK_LE:
+						new->fval = left->fval <= right->fval;
+						break;
+					case TOK_EQ:
+						new->fval = left->fval == right->fval;
+						break;
 
+				}
 			}
 			break;
 		}
@@ -1009,6 +1175,9 @@ optimize_tree_arith(ParseState* P, ExpNode* tree) {
 			/* no need to create a new node like we do for binary operator
 			 * evaluation... just change the operand accordingly */
 			 break;
+		}
+		case EXP_CAST: {
+			optimize_tree_arith(P, tree->cval->operand);
 		}
 	}
 	if (!new) return;
@@ -1311,6 +1480,72 @@ jump_out(ParseState* P) {
 	P->current_block = block;
 }
 
+/* TODO make this compatible with parse_declaration */
+static TreeType*
+parse_struct(ParseState* P) {
+	/* starts on the identifier of the struct */
+	TreeType* str = malloc(sizeof(TreeType));
+	str->sval = malloc(sizeof(TreeStruct));
+	str->sval->fields = NULL;
+	str->type_name = malloc(strlen(P->token->word) + 1);
+	strcpy(str->type_name, P->token->word);
+	/* skip over colon */
+	P->token = P->token->next->next;
+	uint32_t mod = 0;
+	uint32_t modifiers = 0;
+	while ((mod = get_modifier(P->token->word))) {
+		/* currently all modifiers are not allowed on structs, but might 
+		 * as well have the capability to parse them for later */
+		if (mod == MOD_CFUNC) {
+			parse_error(P, "modifier '%s' can only be used on function declarations");
+		} else if (mod == MOD_CONST || mod == MOD_STATIC || mod == MOD_VOLATILE) {
+			parse_error(P, "modifier '%s' can't be used on a struct", P->token->word);
+		}
+		if (modifiers & mod) {
+			parse_error(P, "duplicate modifier '%s' in struct declaration", P->token->word);
+		}
+		modifiers |= mod;
+		P->token = P->token->next;
+	}
+	/* no need to assert that we're on 'struct', matches_struct already did that */
+	P->token = P->token->next;
+	/* just a declaration... */
+	if (P->token->type == TOK_SEMICOLON) {
+		P->token = P->token->next;
+		str->sval->initialized = 0;
+	/* an implementation... */
+	} else if (P->token->type == TOK_OPENCURL) {
+		P->token = P->token->next;
+		str->sval->initialized = 1;
+		while (P->token && P->token->type != TOK_CLOSECURL) {
+			TreeVariable* field = parse_declaration(P);
+			make_sure(P, TOK_SEMICOLON, "token ';' expected to follow declaration");
+			/* append field to the fields list */
+			TreeVariableList* new = malloc(sizeof(TreeVariableList));
+			new->variable = field;
+			new->next = NULL;
+			if (str->sval->fields) {
+				TreeVariableList* i;
+				for (i = str->sval->fields; i->next; i = i->next);
+				i->next = new;
+			} else {
+				str->sval->fields = new;
+			}
+			P->token = P->token->next;
+		}
+		if (!P->token) {
+			parse_error(P, "unexpected EOF when parsing struct '%s'", str->type_name);
+		}
+		/* skip over close curl */
+		P->token = P->token->next;
+		make_sure(P, TOK_SEMICOLON, "expected token ';' to follow declaration of struct '%s'", str->type_name);
+	/* illegal */
+	} else {
+		parse_error(P, "expected token ';' or '{' to follow token 'struct'");
+	}
+	return str;
+}
+
 /*
  * <typename> ::= <identifier>
  * <datatype> ::= <modifier>* <typename> "^"*
@@ -1323,6 +1558,7 @@ parse_datatype(ParseState* P) {
 	type->plevel = 0;
 	type->size = 0;
 	type->modifier = 0;
+	type->sval = NULL;
 
 	/* find modifiers */	
 	int found;
@@ -1348,6 +1584,13 @@ parse_datatype(ParseState* P) {
 	/* make sure it's a type */
 	if (!get_datatype(P, type->type_name)) {
 		parse_error(P, "unknown type name '%s'", type->type_name);
+	}
+	/* set sval accordingly */
+	for (TreeTypeList* i = P->defined_types; i; i = i->next) {
+		if (!strcmp(i->datatype->type_name, type->type_name)) {
+			type->sval = i->datatype->sval;
+			break;	
+		}
 	}
 	P->token = P->token->next;
 
@@ -1541,6 +1784,15 @@ parse_return(ParseState* P) {
 	node->type = NODE_RETURN;
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
 	node->stateval = parse_expression(P);
+	const TreeType* eval_ret = typecheck_expression(P, node->stateval);
+	if (!exact_datatype(eval_ret, P->current_function->funcval->return_type)) {
+		parse_error(
+			P, 
+			"return statement evaluates to type (%s), expected type (%s)",
+			tostring_datatype(eval_ret),
+			tostring_datatype(P->current_function->funcval->return_type)
+		);
+	}
 	P->token = P->token->next;
 	append(P, node);
 }
@@ -1667,6 +1919,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 	type_int->plevel = 0;
 	type_int->size = 8;
 	type_int->modifier = 0;
+	type_int->sval = NULL;
 	P->type_integer = type_int;
 	register_datatype(P, type_int);
 	
@@ -1676,6 +1929,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 	type_float->plevel = 0;
 	type_float->size = 8;
 	type_float->modifier = 0;
+	type_float->sval = NULL;
 	P->type_float = type_float;
 	register_datatype(P, type_float);
 	
@@ -1685,6 +1939,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 	type_byte->plevel = 0;
 	type_byte->size = 1;
 	type_byte->modifier = 0;
+	type_byte->sval = NULL;
 	P->type_byte = type_byte;
 	register_datatype(P, type_byte);
 
@@ -1716,6 +1971,9 @@ generate_tree(LexState* L, ParseOptions* options) {
 			continue;
 		} else if (matches_function(P)) {
 			parse_function(P);
+			continue;
+		} else if (matches_struct(P)) {
+			register_datatype(P, parse_struct(P));
 			continue;
 		}
 		switch (P->token->type) {

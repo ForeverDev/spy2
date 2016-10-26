@@ -8,6 +8,7 @@ typedef struct ParseState ParseState;
 typedef struct ParseOptions ParseOptions;
 typedef struct ExpNode ExpNode;
 typedef struct TreeType TreeType;
+typedef struct TreeStruct TreeStruct;
 typedef struct TreeTypeList TreeTypeList;
 typedef struct BinaryOp BinaryOp;
 typedef struct UnaryOp UnaryOp;
@@ -41,6 +42,12 @@ struct TreeType {
 	unsigned int plevel; /* depth of pointer */
 	unsigned int size; /* number of bytes needed to store */
 	uint16_t modifier;
+	TreeStruct* sval; /* NULL if it's not a struct */
+};
+
+struct TreeStruct {
+	TreeVariableList* fields;
+	int initialized;
 };
 
 struct TreeVariable {
