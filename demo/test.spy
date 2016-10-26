@@ -8,6 +8,8 @@ Circle: struct {
 	radius: float;
 };
 
-circle: Circle;
-circle.radius = 50.0;
-circle.center = (Vector2^)100;
+test: () -> void {
+	circle: Circle;
+	circle.radius = 50.0;
+	circle.center = (Vector2^)100;
+}

@@ -1661,31 +1661,35 @@ parse_function(ParseState* P) {
 	/* also no need to make sure we're on "(" */
 	P->token = P->token->next;
 	/* now we're either on an argument list or a ")" */
-	while (P->token->type != TOK_CLOSEPAR) {
-		node->funcval->nparams++;
-		TreeVariable* arg = parse_declaration(P);
-		TreeVariableList* list = malloc(sizeof(TreeVariableList));
-		list->variable = arg;
-		list->next = NULL;
-		/* append the arg to list of params */
-		if (!node->funcval->params) {
-			node->funcval->params = list;
-		} else {
-			TreeVariableList* i;
-			for (i = node->funcval->params; i->next; i = i->next);
-			i->next = list;
-		}
-		if (!P->token) {
-			parse_error(P, "unexpected EOF while parsing function argument list");
-		}
-		if (P->token->type == TOK_CLOSEPAR) {
-			P->token = P->token->next;
-			break;
-		}
-		if (P->token->type != TOK_COMMA) {
-			parse_error(P, "expected ',' or ')' to follow declaration of argument '%s'", arg->identifier);
-		}
+	if (P->token->type == TOK_CLOSEPAR) {
 		P->token = P->token->next;
+	} else {
+		while (P->token->type != TOK_CLOSEPAR) {
+			node->funcval->nparams++;
+			TreeVariable* arg = parse_declaration(P);
+			TreeVariableList* list = malloc(sizeof(TreeVariableList));
+			list->variable = arg;
+			list->next = NULL;
+			/* append the arg to list of params */
+			if (!node->funcval->params) {
+				node->funcval->params = list;
+			} else {
+				TreeVariableList* i;
+				for (i = node->funcval->params; i->next; i = i->next);
+				i->next = list;
+			}
+			if (!P->token) {
+				parse_error(P, "unexpected EOF while parsing function argument list");
+			}
+			if (P->token->type == TOK_CLOSEPAR) {
+				P->token = P->token->next;
+				break;
+			}
+			if (P->token->type != TOK_COMMA) {
+				parse_error(P, "expected ',' or ')' to follow declaration of argument '%s'", arg->identifier);
+			}
+			P->token = P->token->next;
+		}
 	}
 	make_sure(P, TOK_ARROW, "expected token '->' to follow function argument list");
 	P->token = P->token->next;
@@ -1753,13 +1757,15 @@ parse_function(ParseState* P) {
 	 * square: (n: int) -> int = n * n;
 	 */
 	append(P, node);
-	/* now we're free to remove decl from the list */
-	if (decl->prev) {
-		decl->prev->next = decl->next;
-	} else {
-		P->root_block->blockval->child = decl->next;
+	if (decl) {
+		/* now we're free to remove decl from the list */
+		if (decl->prev) {
+			decl->prev->next = decl->next;
+		} else {
+			P->root_block->blockval->child = decl->next;
+		}
+		free(decl);
 	}
-	free(decl);
 	if (P->token->type == TOK_ASSIGN) {
 		/* check if it's a 'short' function */
 		P->token = P->token->next;
