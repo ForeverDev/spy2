@@ -23,6 +23,7 @@ typedef struct TreeDecl TreeDecl;
 typedef struct TreeFunction TreeFunction;
 typedef struct TreeVariable TreeVariable;
 typedef struct TreeVariableList TreeVariableList;
+typedef struct LiteralList LiteralList;
 typedef enum TreeNodeType TreeNodeType;
 
 enum TreeNodeType {
@@ -37,11 +38,17 @@ enum TreeNodeType {
 	NODE_CONTINUE = 9
 };
 
+struct LiteralList {
+	char* literal;
+	LiteralList* next;
+};	
+
 struct TreeType {
 	char* type_name;
 	unsigned int plevel; /* depth of pointer */
 	unsigned int size; /* number of bytes needed to store */
 	uint16_t modifier;
+	int is_generic; /* if it's a generic type, the type is not yet known... */
 	TreeStruct* sval; /* NULL if it's not a struct */
 };
 
@@ -109,6 +116,8 @@ struct TreeFunction {
 	uint32_t modifiers;
 	int implemented;
 	int nparams;
+	LiteralList* generics;
+	int ngenerics;
 	TreeVariableList* params;
 	TreeType* return_type;	
 	TreeNode* child;

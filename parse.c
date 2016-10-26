@@ -13,6 +13,8 @@
 #define MOD_CFUNC (0x1 << 3)
 #define MOD_COUNT 4
 
+#define GENERIC_BAIL ((TreeType *)-1)
+
 typedef struct ExpStack ExpStack;
 typedef struct OperatorInfo OperatorInfo;
 typedef struct ModifierInfo ModifierInfo;
@@ -36,6 +38,7 @@ static int matches_datatype(ParseState*);
 static int matches_declaration(ParseState*);
 static int matches_function(ParseState*);
 static int matches_struct(ParseState*);
+static int matches_comment(ParseState*);
 
 /* parsing functions */
 static TreeType* parse_datatype(ParseState*);
@@ -50,6 +53,7 @@ static void parse_function(ParseState*);
 static void parse_return(ParseState*);
 static void parse_break(ParseState*);
 static void parse_continue(ParseState*);
+static void parse_comment(ParseState*);
 
 /* expression stack functions */
 static void expstack_push(ExpStack*, ExpNode*);
@@ -64,13 +68,14 @@ static int on(ParseState*, int, ...);
 static void next(ParseState*, int);
 static void register_datatype(ParseState*, TreeType*);
 static void register_local(ParseState*, TreeVariable*);
-static TreeType* get_datatype(ParseState*, const char*);
 static void make_sure(ParseState*, TokenType, const char*, ...);
 static void mark_expression(ParseState*, TokenType, TokenType);
 static TreeNode* new_node(ParseState*, TreeNodeType);
 static void append(ParseState*, TreeNode*);
 static int is_keyword(const char*);
 static int get_modifier(const char*);
+static int is_datatype(ParseState*, const char*);
+static char* is_generic_type(ParseState*, const char*);
 static TreeVariable* get_local(ParseState*, const char*);
 static Token* peek(ParseState*, int);
 static const TreeType* typecheck_expression(ParseState*, ExpNode*);
@@ -388,14 +393,17 @@ register_local(ParseState* P, TreeVariable* var) {
 	i->next = new;
 }
 
-static TreeType*
-get_datatype(ParseState* P, const char* type_name) {
+static int 
+is_datatype(ParseState* P, const char* type_name) {
+	if (is_generic_type(P, type_name)) {
+		return 1;
+	}
 	for (TreeTypeList* i = P->defined_types; i && i->datatype; i = i->next) {
 		if (!strcmp(i->datatype->type_name, type_name)) {
-			return i->datatype;
+			return 1;
 		}
 	}
-	return NULL;
+	return 0;
 }
 
 static char*
@@ -533,6 +541,17 @@ print_node(TreeNode* node, int indent) {
 			}
 			INDENT(indent + 1);
 			printf("]\n");
+			if (node->funcval->generics) {
+				INDENT(indent + 1);
+				printf("GENERICS: [");
+				for (LiteralList* i = node->funcval->generics; i; i = i->next) {
+					printf("%s", i->literal);
+					if (i->next) {
+						printf(", ");
+					}
+				}
+				printf("]\n");
+			}
 			INDENT(indent + 1);
 			printf("CHILD: [\n");
 			print_node(node->funcval->child, indent + 2);
@@ -592,6 +611,15 @@ print_expression(ExpNode* tree, int indent) {
 	}
 }
 
+static int
+matches_comment(ParseState* P) {
+	Token* at = P->token;
+	if (!at || at->type != TOK_FORSLASH) return 0;
+	at = at->next;
+	if (!at || at->type != TOK_ASTER) return 0;
+	return 1;
+}
+
 /* tells whether or not the parser is looking at a struct declaration */
 static int
 matches_struct(ParseState* P) {
@@ -616,6 +644,15 @@ matches_function(ParseState* P) {
 	Token* at = P->token;
 	if (!at || at->type != TOK_IDENTIFIER) return 0;	
 	at = at->next;
+	/* optional generic sequence */
+	if (at && at->type == TOK_LT) {
+		while (at) {
+			if (at->type == TOK_GT) break;
+			at = at->next;
+		}
+		if (!at) return 0;
+		at = at->next;
+	}
 	if (!at || at->type != TOK_COLON) return 0;
 	at = at->next;
 	/* optional function modifiers */
@@ -633,7 +670,7 @@ matches_datatype(ParseState* P) {
 	while (get_modifier(at->word)) {
 		at = at->next;
 	}
-	return get_datatype(P, at->word) != NULL;
+	return is_datatype(P, at->word);
 }
 
 static int
@@ -748,15 +785,34 @@ append(ParseState* P, TreeNode* node) {
 	}
 }
 
+/* tells whether the identifier is a generic type */
+static char*
+is_generic_type(ParseState* P, const char* identifier) {
+	if (!P->current_function) return NULL;
+	for (LiteralList* i = P->current_function->funcval->generics; i; i = i->next) {
+		if (!strcmp(i->literal, identifier)) {
+			return i->literal;
+		}
+	}
+	return NULL;
+}
+
 static TreeVariable*
 get_local(ParseState* P, const char* identifier) {
 	for (TreeNode* i = P->current_block; i; i = i->parent) {
-		if (i->type != NODE_BLOCK) continue;
-		for (TreeVariableList* j = i->blockval->locals; j; j = j->next) {
-			if (!strcmp(j->variable->identifier, identifier)) {
-				return j->variable;
+		if (i->type == NODE_BLOCK) {
+			for (TreeVariableList* j = i->blockval->locals; j; j = j->next) {
+				if (!strcmp(j->variable->identifier, identifier)) {
+					return j->variable;
+				}
 			}
-		}
+		} else if (i->type == NODE_FUNCTION) {
+			for (TreeVariableList* j = i->funcval->params; j; j = j->next) {
+				if (!strcmp(j->variable->identifier, identifier)) {
+					return j->variable;
+				}
+			}
+		}	
 	}
 	return NULL;
 }
@@ -784,6 +840,7 @@ tree_datatype(ParseState* P, ExpNode* tree) {
 	return NULL;
 }
 
+
 /* completely validates an expression tree and returns its type */
 static const TreeType*
 typecheck_expression(ParseState* P, ExpNode* tree) {
@@ -795,8 +852,13 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 		case EXP_BYTE:
 			return P->type_byte;	
 		case EXP_CAST: 
-			/* no need to do anything with return value because it's a cast */
-			typecheck_expression(P, tree->cval->operand);
+			/* if it's a cast to a generic type, bail */
+			if (tree->cval->datatype->is_generic) {
+				return GENERIC_BAIL;
+			}
+			if (typecheck_expression(P, tree->cval->operand) == GENERIC_BAIL) {
+				return GENERIC_BAIL;
+			}
 			return tree->cval->datatype;
 		case EXP_BINOP:
 			switch (tree->bval->type) {
@@ -815,6 +877,9 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_DIVBY: {
 					const TreeType* a = typecheck_expression(P, tree->bval->left);
 					const TreeType* b = typecheck_expression(P, tree->bval->right);
+					if (a == GENERIC_BAIL || b == GENERIC_BAIL) {
+						return GENERIC_BAIL;
+					}
 					if (!exact_datatype(a, b)) {
 						parse_error(
 							P,
@@ -837,6 +902,9 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_XORBY: {
 					const TreeType* a = typecheck_expression(P, tree->bval->left);
 					const TreeType* b = typecheck_expression(P, tree->bval->right);
+					if (a == GENERIC_BAIL || b == GENERIC_BAIL) {
+						return GENERIC_BAIL;
+					}
 					/* in bitwise operators, both operands must be integers (or pointers) */
 					if (
 						(strcmp(a->type_name, "int") && a->plevel == 0) 
@@ -872,6 +940,9 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					} else if (left->type == EXP_BINOP && left->bval->type == TOK_PERIOD) {
 						type_struct = typecheck_expression(P, left);
 					}
+					if (type_struct == GENERIC_BAIL) {
+						return GENERIC_BAIL;
+					}
 					if (!type_struct || !type_struct->sval) {
 						parse_error(P, "attempt to use the '.' operator on something that isn't a struct");
 					}
@@ -891,8 +962,16 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					return field->datatype;
 				}
 			}
-			case EXP_IDENTIFIER:
-				return P->type_integer;	
+			case EXP_IDENTIFIER: {
+				TreeVariable* var = get_local(P, tree->idval);
+				if (!var) {
+					parse_error(P, "undeclared identifier '%s'", tree->idval);	
+				}
+				if (var->datatype->is_generic) {
+					return GENERIC_BAIL;
+				}
+				return var->datatype;
+			}
 			
 	}
 	return NULL;
@@ -1176,9 +1255,10 @@ optimize_tree_arith(ParseState* P, ExpNode* tree) {
 			 * evaluation... just change the operand accordingly */
 			 break;
 		}
-		case EXP_CAST: {
-			optimize_tree_arith(P, tree->cval->operand);
-		}
+		case EXP_CAST: 
+			optimize_tree_arith(P, tree->cval->operand);;
+			break;
+		
 	}
 	if (!new) return;
 	if (tree->parent) {
@@ -1559,6 +1639,7 @@ parse_datatype(ParseState* P) {
 	type->size = 0;
 	type->modifier = 0;
 	type->sval = NULL;
+	type->is_generic = 0;
 
 	/* find modifiers */	
 	int found;
@@ -1582,14 +1663,18 @@ parse_datatype(ParseState* P) {
 	type->type_name = malloc(strlen(P->token->word) + 1);
 	strcpy(type->type_name, P->token->word);
 	/* make sure it's a type */
-	if (!get_datatype(P, type->type_name)) {
+	if (is_generic_type(P, P->token->word)) {
+		type->is_generic = 1;
+	} if (!is_datatype(P, type->type_name)) {
 		parse_error(P, "unknown type name '%s'", type->type_name);
-	}
+	} 
 	/* set sval accordingly */
-	for (TreeTypeList* i = P->defined_types; i; i = i->next) {
-		if (!strcmp(i->datatype->type_name, type->type_name)) {
-			type->sval = i->datatype->sval;
-			break;	
+	if (!type->is_generic) {
+		for (TreeTypeList* i = P->defined_types; i; i = i->next) {
+			if (!strcmp(i->datatype->type_name, type->type_name)) {
+				type->sval = i->datatype->sval;
+				break;	
+			}
 		}
 	}
 	P->token = P->token->next;
@@ -1618,6 +1703,9 @@ parse_declaration(ParseState* P) {
 	TreeVariable* decl = malloc(sizeof(TreeVariable));
 	decl->identifier = malloc(strlen(P->token->word) + 1);
 	strcpy(decl->identifier, P->token->word);
+	if (get_local(P, decl->identifier)) {
+		parse_error(P, "duplicate declaration of variable '%s'", decl->identifier);
+	}
 	P->token = P->token->next->next;
 	decl->datatype = parse_datatype(P);
 	return decl;
@@ -1647,12 +1735,73 @@ parse_function(ParseState* P) {
 	TreeNode* node = malloc(sizeof(TreeNode));
 	node->type = NODE_FUNCTION;
 	node->funcval = malloc(sizeof(TreeFunction));
+	node->funcval->generics = NULL;
+	node->funcval->ngenerics = 0;
 	node->funcval->identifier = malloc(strlen(P->token->word) + 1);
 	node->funcval->params = NULL;
 	node->funcval->nparams = 0;
+	P->current_function = node;
 	strcpy(node->funcval->identifier, P->token->word);
-	P->token = P->token->next->next;
-	/* no need to make sure we're on a semicolon, matches_function() already did that */
+	/* check if the function is a generic */
+	P->token = P->token->next;
+	if (P->token->type == TOK_LT) {
+		P->token = P->token->next;
+		if (P->token->type == TOK_GT) {
+			parse_error(P, "generic list for function '%s' cannot be empty", node->funcval->identifier);
+		}
+		while (P && P->token->type != TOK_GT) {
+			if (P->token->type != TOK_IDENTIFIER) {
+				parse_error(P, "expected identifier in generic list, got token '%s'", P->token->word);
+			}
+			node->funcval->ngenerics++;
+			LiteralList* new = malloc(sizeof(LiteralList));
+			new->next = NULL;
+			new->literal = malloc(strlen(P->token->word) + 1);
+			strcpy(new->literal, P->token->word);
+			/* append to list of generics */
+			if (!node->funcval->generics) {
+				node->funcval->generics = new;
+			} else {
+				LiteralList* i;
+				/* make sure its not a duplicate */
+				if (is_generic_type(P, new->literal)) {
+					parse_error(P, "duplicate identifier in generic list, '%s'", new->literal);
+				}
+				/* make sure it's not an actual type */
+				if (is_datatype(P, new->literal)) {
+					parse_error(
+						P, 
+						"generic types can't have the same type name as an existing type (found '%s')",
+						new->literal
+					);
+				}
+				/* now append */
+				for (i = node->funcval->generics; i->next; i = i->next);
+				i->next = new;
+			}
+			P->token = P->token->next;
+			if (P->token->type != TOK_COMMA && P->token->type != TOK_GT) {
+				parse_error(
+					P, 
+					"expected token ',' or '>' to follow token '%s', got token '%s'",
+					P->token->prev->word,
+					P->token->word
+				);
+			}
+			if (P->token->type == TOK_COMMA) {
+				P->token = P->token->next;
+			}
+		}
+		if (!P) {
+			parse_error(P, "unexpected EOF when parsing generic list for function '%s'", node->funcval->identifier);
+		}
+		/* skip over token '>' and ':' */
+		P->token = P->token->next->next;
+	} else {
+		/* skip over token ':' */
+		P->token = P->token->next;
+	}
+	/* scan for modifiers */
 	uint32_t mod;
 	while ((mod = get_modifier(P->token->word))) {
 		node->funcval->modifiers |= mod;
@@ -1752,7 +1901,6 @@ parse_function(ParseState* P) {
 		append(P, node);
 		return;
 	}
-	P->current_function = node;
 	/* it is valid to declare a function like you would a math function, e.g.
 	 * square: (n: int) -> int = n * n;
 	 */
@@ -1781,6 +1929,22 @@ parse_function(ParseState* P) {
 	}
 }
 
+/* skips over a comment */
+static void
+parse_comment(ParseState* P) {
+	/* starts on '/' */
+	P->token = P->token->next->next;
+	while (1) {
+		if (!P->token || !P->token->next) {
+			parse_error(P, "unexpected EOF while parsing comment");
+		}
+		if (P->token->type == TOK_ASTER && P->token->next->type == TOK_FORSLASH) {
+			P->token = P->token->next->next;
+			break;
+		}
+	}
+}
+
 static void
 parse_return(ParseState* P) {
 	/* no need to check if we're inside of a function... append does that */
@@ -1791,7 +1955,7 @@ parse_return(ParseState* P) {
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
 	node->stateval = parse_expression(P);
 	const TreeType* eval_ret = typecheck_expression(P, node->stateval);
-	if (!exact_datatype(eval_ret, P->current_function->funcval->return_type)) {
+	if (eval_ret != GENERIC_BAIL && !exact_datatype(eval_ret, P->current_function->funcval->return_type)) {
 		parse_error(
 			P, 
 			"return statement evaluates to type (%s), expected type (%s)",
@@ -1980,6 +2144,9 @@ generate_tree(LexState* L, ParseOptions* options) {
 			continue;
 		} else if (matches_struct(P)) {
 			register_datatype(P, parse_struct(P));
+			continue;
+		} else if (matches_comment(P)) {
+			parse_comment(P);
 			continue;
 		}
 		switch (P->token->type) {

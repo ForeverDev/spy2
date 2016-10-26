@@ -1,15 +1,21 @@
-Vector2: struct {
-	x: float;
-	y: float;
+some_struct: struct {
+	random_field: int;
 };
 
-Circle: struct {
-	center: Vector2^;
-	radius: float;
+example<T>: () -> void {
+	
+	a: T;			/* a's type is undetermined, don't typecheck any expression with it */
+	b: some_struct; /* b's type is determined, typecheck normally */
+
+	x: int;
+	y: int;
+	
+	x = (a + 13) * b;	/* isn't typechecked */
+	y = (b + 13) * 17;  /* is typechecked, and an error is reported */
 };
 
-test: () -> void {
-	circle: Circle;
-	circle.radius = 50.0;
-	circle.center = (Vector2^)100;
+factorial: (n: int) -> int {
+	if (n <= 1)
+		return 1;
+	return n * factorial(n - 1);
 }
