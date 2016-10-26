@@ -1,15 +1,11 @@
-some_struct: struct {
-	random_field: int;
+Vector3: struct {
+	x: float;
+	y: float;
+	z: float;
 };
 
-example<T>: () -> void {
-	
-	a: T;			/* a's type is undetermined, don't typecheck any expression with it */
-	b: some_struct; /* b's type is determined, typecheck normally */
+test: (a: int, b: int, c: int) -> int = a;
 
-	x: int;
-	y: int;
-	
-	x = (a + 13) * b;	/* isn't typechecked */
-	y = (b + 13) * 17;  /* is typechecked, and an error is reported */
-};
+main: () -> void {
+	test(10, 20);
+}	

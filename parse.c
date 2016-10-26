@@ -37,12 +37,14 @@ static int optimize_arith_available(ParseState*, ExpNode*);
 static int matches_datatype(ParseState*);
 static int matches_declaration(ParseState*);
 static int matches_function(ParseState*);
+static int matches_function_call(ParseState*);
 static int matches_struct(ParseState*);
 static int matches_comment(ParseState*);
 
 /* parsing functions */
 static TreeType* parse_datatype(ParseState*);
 static ExpNode* parse_expression(ParseState*);
+static ExpNode* parse_function_call(ParseState*);
 static TreeNode* parse_statement(ParseState*);
 static TreeVariable* parse_declaration(ParseState*);
 static TreeType* parse_struct(ParseState*);
@@ -75,8 +77,9 @@ static void append(ParseState*, TreeNode*);
 static int is_keyword(const char*);
 static int get_modifier(const char*);
 static int is_datatype(ParseState*, const char*);
-static char* is_generic_type(ParseState*, const char*);
+static int is_generic_type(ParseState*, const char*);
 static TreeVariable* get_local(ParseState*, const char*);
+static TreeFunction* get_function(ParseState*, const char*);
 static Token* peek(ParseState*, int);
 static const TreeType* typecheck_expression(ParseState*, ExpNode*);
 static int exact_datatype(const TreeType*, const TreeType*);
@@ -372,7 +375,6 @@ register_datatype(ParseState* P, TreeType* type) {
 	TreeTypeList* new = malloc(sizeof(TreeTypeList));
 	new->datatype = type;
 	new->next = NULL;
-	new->prev = list;
 	list->next = new;
 }
 
@@ -383,6 +385,7 @@ register_local(ParseState* P, TreeVariable* var) {
 		block->locals = malloc(sizeof(TreeVariableList));
 		block->locals->variable = var;
 		block->locals->next = NULL;
+		block->locals->prev = NULL;
 		return;
 	}	
 	TreeVariableList* i;
@@ -390,6 +393,7 @@ register_local(ParseState* P, TreeVariable* var) {
 	TreeVariableList* new = malloc(sizeof(TreeVariableList));
 	new->variable = var;
 	new->next = NULL;
+	new->prev = i;
 	i->next = new;
 }
 
@@ -608,6 +612,12 @@ print_expression(ExpNode* tree, int indent) {
 			printf(")\n");
 			print_expression(tree->cval->operand, indent + 1);
 			break;
+		case EXP_FUNC_CALL:
+			printf("%s(\n", tree->fcval->func->identifier);
+			print_expression(tree->fcval->argument, indent + 1);
+			INDENT(indent);
+			printf(")\n");
+			break;
 	}
 }
 
@@ -632,6 +642,24 @@ matches_struct(ParseState* P) {
 		at = at->next;
 	}
 	if (!at || at->type != TOK_STRUCT) return 0;
+	return 1;
+}
+
+static int
+matches_function_call(ParseState* P) {
+	Token* at = P->token;
+	if (!at || at->type != TOK_IDENTIFIER) return 0;
+	at = at->next;
+	/* optional generic sequence */
+	if (at && at->type == TOK_LT) {
+		while (at) {
+			if (at->type == TOK_GT) break;
+			at = at->next;
+		}
+		if (!at) return 0;
+		at = at->next;
+	}
+	if (!at || at->type != TOK_OPENPAR) return 0;
 	return 1;
 }
 
@@ -786,12 +814,25 @@ append(ParseState* P, TreeNode* node) {
 }
 
 /* tells whether the identifier is a generic type */
-static char*
+static int 
 is_generic_type(ParseState* P, const char* identifier) {
-	if (!P->current_function) return NULL;
+	if (!P->current_function) return 0;
 	for (LiteralList* i = P->current_function->funcval->generics; i; i = i->next) {
 		if (!strcmp(i->literal, identifier)) {
-			return i->literal;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static TreeFunction*
+get_function(ParseState* P, const char* identifier) {
+	/* functions can only exist in the main scope,
+	 * no need to recursively scan */
+	for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
+		if (i->type != NODE_FUNCTION) continue;
+		if (!strcmp(i->funcval->identifier, identifier)) {
+			return i->funcval;
 		}
 	}
 	return NULL;
@@ -799,6 +840,10 @@ is_generic_type(ParseState* P, const char* identifier) {
 
 static TreeVariable*
 get_local(ParseState* P, const char* identifier) {
+	int is_generic = 0;
+	if (is_generic_type(P, identifier)) {
+		is_generic = 1;
+	}
 	for (TreeNode* i = P->current_block; i; i = i->parent) {
 		if (i->type == NODE_BLOCK) {
 			for (TreeVariableList* j = i->blockval->locals; j; j = j->next) {
@@ -806,13 +851,13 @@ get_local(ParseState* P, const char* identifier) {
 					return j->variable;
 				}
 			}
-		} else if (i->type == NODE_FUNCTION) {
-			for (TreeVariableList* j = i->funcval->params; j; j = j->next) {
-				if (!strcmp(j->variable->identifier, identifier)) {
-					return j->variable;
-				}
-			}
-		}	
+		}
+	}
+	if (!P->current_function) return NULL;
+	for (TreeVariableList* i = P->current_function->funcval->params; i; i = i->next) {
+		if (!strcmp(i->variable->identifier, identifier)) {
+			return i->variable;
+		}
 	}
 	return NULL;
 }
@@ -840,6 +885,22 @@ tree_datatype(ParseState* P, ExpNode* tree) {
 	return NULL;
 }
 
+/* helper function for typecheck_expression */
+static void
+assert_proper_param(ParseState* P, const char* func_id, int at_param, 
+					   const TreeType* expected, const TreeType* test
+					   ) {
+	if (!exact_datatype(expected, test)) {
+		parse_error(
+			P, 
+			"parameter #%d of call to function '%s' evaluates to type (%s), expected type (%s)",
+			at_param,
+			func_id,
+			tostring_datatype(test),
+			tostring_datatype(expected)	
+		);
+	}
+}
 
 /* completely validates an expression tree and returns its type */
 static const TreeType*
@@ -971,6 +1032,67 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					return GENERIC_BAIL;
 				}
 				return var->datatype;
+			}
+			case EXP_FUNC_CALL: {
+				/* the current comma being scanned */
+				ExpNode* scan = tree->fcval->argument;	
+				/* the list of function arguments */
+				TreeVariableList* fparams = tree->fcval->func->params;
+				/* set to the final param type */
+				while (fparams->next) {
+					fparams = fparams->next;
+				}
+				unsigned int expected_params = tree->fcval->func->nparams;
+				unsigned int at_param = expected_params;
+				if (scan->type == EXP_BINOP && scan->bval->type == TOK_COMMA) {
+					while (scan->type == EXP_BINOP && scan->bval->type == TOK_COMMA) {
+						/* the right operand of the comma is the argument, the left
+						 * side is either another comma or the first scanument */
+						ExpNode* left = scan->bval->left;
+						ExpNode* right = scan->bval->right;
+						int do_both = !(left->type == EXP_BINOP && left->bval->type == TOK_COMMA);
+						if (do_both) {
+							if (!fparams || !fparams->prev) {
+								parse_error(P, "wrong num");
+							}
+						} else {
+							if (!fparams) {
+								parse_error(P, "wrong num");
+							}
+						}
+						assert_proper_param(
+							P,
+							tree->fcval->func->identifier,
+							at_param,
+							fparams->variable->datatype,
+							typecheck_expression(P, right)	
+						);
+						/* check if there are no more commas... */
+						if (do_both) {
+							assert_proper_param(
+								P,
+								tree->fcval->func->identifier,
+								at_param,
+								fparams->prev->variable->datatype,
+								typecheck_expression(P, right)	
+							);
+							break;
+						}
+						scan = left;
+						fparams = fparams->prev;
+					}
+				} else {
+					assert_proper_param(
+						P, 
+						tree->fcval->func->identifier, 
+						at_param, 
+						fparams->variable->datatype, 
+						typecheck_expression(P, scan)
+					);
+				}
+				if (!fparams->prev) {
+					parse_error(P, "too many");
+				}
 			}
 			
 	}
@@ -1280,6 +1402,66 @@ optimize_tree_arith(ParseState* P, ExpNode* tree) {
 }
 
 static ExpNode* 
+parse_function_call(ParseState* P) {
+	/* starts on the identifier of the function */
+	ExpNode* call = malloc(sizeof(ExpNode));
+	call->type = EXP_FUNC_CALL;
+	call->fcval = malloc(sizeof(FuncCall));
+	call->fcval->generic_list = NULL;
+	call->fcval->argument = NULL;
+	call->fcval->func = get_function(P, P->token->word);
+	if (!call->fcval->func) {
+		parse_error(P, "attempt to call a non-existant function '%s'", P->token->word);
+	}
+	P->token = P->token->next;
+	/* check if it has a generic list */
+	if (P->token->type == TOK_LT) {
+		P->token = P->token->next;
+		if (P->token->type == TOK_GT) {
+			parse_error(P, "generic type list cannot be empty");
+		}
+		while (P->token && P->token->type != TOK_GT) {
+			TreeType* type = parse_datatype(P);
+			TreeTypeList* new = malloc(sizeof(TreeTypeList));
+			new->datatype = type;
+			new->next = NULL;
+			/* append to generic list */
+			if (!call->fcval->generic_list) {
+				call->fcval->generic_list = new;
+			} else {
+				TreeTypeList* i;
+				for (i = call->fcval->generic_list; i->next; i = i->next);
+				i->next = new;
+			}
+			if (!P->token) break;
+			if (P->token->type != TOK_COMMA && P->token->type != TOK_GT) {
+				parse_error(P, "expected token ';' or '>' after type (%s), got token '%s'", tostring_datatype(type), P->token->word);	
+			}
+			if (P->token->type == TOK_COMMA) {
+				P->token = P->token->next;
+			}
+		}
+		if (!P->token) {
+			parse_error(P, "unexpected EOF while parsing generic type list");
+		}
+		P->token = P->token->next;
+	}
+	/* skip over open parenthesis */
+	P->token = P->token->next;
+	/* save end mark because of recursive call to parse_expressio */
+	if (P->token->type != TOK_CLOSEPAR) { 
+		Token* end_mark = P->end_mark;
+		mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR);
+		call->fcval->argument = parse_expression(P);
+		P->end_mark = end_mark; /* restore end mark */
+		print_expression(call->fcval->argument, 0);
+	} else {
+		P->token = P->token->next;
+	}
+	return call;
+}
+
+static ExpNode* 
 parse_expression(ParseState* P) {
 
 	if (!P->token || P->token->type == TOK_SEMICOLON) {
@@ -1329,8 +1511,10 @@ parse_expression(ParseState* P) {
 
 	for (; P->token && P->token != P->end_mark; P->token = P->token->next) {
 		if (P->token->type == TOK_SEMICOLON) continue;
-		/* use assoc to see if it exists */
-		if (matches_datatype(P)) {
+		if (matches_function_call(P)) {
+			ExpNode* push = parse_function_call(P);			
+			expstack_push(postfix, push);
+		} else if (matches_datatype(P)) {
 			ExpNode* push = malloc(sizeof(ExpNode));
 			push->parent = NULL;
 			push->type = EXP_DATATYPE;
@@ -1461,7 +1645,7 @@ parse_expression(ParseState* P) {
 		ExpNode* pop = expstack_pop(operators);
 		if (pop->type == EXP_UNOP) {
 			if (pop->uval->type == TOK_OPENPAR || pop->uval->type == TOK_CLOSEPAR) {
-				parse_error(P, "mismatched parenthesis");
+				parse_error(P, "mismatched parenthesis in expression");
 			}
 		}
 		expstack_push(postfix, pop);
@@ -1489,6 +1673,7 @@ parse_expression(ParseState* P) {
 			|| node->type == EXP_FLOAT
 			|| node->type == EXP_IDENTIFIER
 			|| node->type == EXP_DATATYPE
+			|| node->type == EXP_FUNC_CALL
 		) {
 			expstack_push(tree, node);
 		/* if it's a binary operator, form a branch */
@@ -1525,8 +1710,6 @@ parse_expression(ParseState* P) {
 			expstack_push(tree, node);
 		}
 	}
-
-	typecheck_expression(P, tree->node);
 	
 	if (P->options->opt_level >= OPT_ONE) {	
 		while (optimize_arith_available(P, tree->node)) {
@@ -1604,10 +1787,12 @@ parse_struct(ParseState* P) {
 			TreeVariableList* new = malloc(sizeof(TreeVariableList));
 			new->variable = field;
 			new->next = NULL;
+			new->prev = NULL;
 			if (str->sval->fields) {
 				TreeVariableList* i;
 				for (i = str->sval->fields; i->next; i = i->next);
 				i->next = new;
+				new->prev = i;
 			} else {
 				str->sval->fields = new;
 			}
@@ -1694,6 +1879,7 @@ static TreeNode*
 parse_statement(ParseState* P) {
 	TreeNode* node = new_node(P, NODE_STATEMENT);
 	node->stateval = parse_expression(P);
+	typecheck_expression(P, node->stateval);
 	return node;
 }
 
@@ -1819,6 +2005,7 @@ parse_function(ParseState* P) {
 			TreeVariableList* list = malloc(sizeof(TreeVariableList));
 			list->variable = arg;
 			list->next = NULL;
+			list->prev = NULL;
 			/* append the arg to list of params */
 			if (!node->funcval->params) {
 				node->funcval->params = list;
@@ -1826,6 +2013,7 @@ parse_function(ParseState* P) {
 				TreeVariableList* i;
 				for (i = node->funcval->params; i->next; i = i->next);
 				i->next = list;
+				list->prev = i;
 			}
 			if (!P->token) {
 				parse_error(P, "unexpected EOF while parsing function argument list");
@@ -1921,6 +2109,7 @@ parse_function(ParseState* P) {
 		ret->type = NODE_RETURN;
 		mark_expression(P, TOK_NULL, TOK_SEMICOLON);
 		ret->stateval = parse_expression(P);
+		typecheck_expression(P, ret->stateval);
 		P->token = P->token->next;
 		append(P, ret);
 		/* set current function back to NULL because were
@@ -2080,7 +2269,6 @@ generate_tree(LexState* L, ParseOptions* options) {
 	P->to_append = NULL;
 	P->defined_types = malloc(sizeof(TreeTypeList));
 	P->defined_types->next = NULL;
-	P->defined_types->prev = NULL;
 	P->defined_types->datatype = NULL;
 	
 	/* establish primitive int */

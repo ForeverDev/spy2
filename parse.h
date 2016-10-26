@@ -12,6 +12,7 @@ typedef struct TreeStruct TreeStruct;
 typedef struct TreeTypeList TreeTypeList;
 typedef struct BinaryOp BinaryOp;
 typedef struct UnaryOp UnaryOp;
+typedef struct FuncCall FuncCall;
 typedef struct TypeCast TypeCast;
 typedef struct TreeNode TreeNode;
 typedef struct TreeBlock TreeBlock;
@@ -65,12 +66,12 @@ struct TreeVariable {
 struct TreeTypeList {
 	TreeType* datatype;
 	TreeTypeList* next;
-	TreeTypeList* prev;
 };
 
 struct TreeVariableList {
 	TreeVariable* variable;
 	TreeVariableList* next;
+	TreeVariableList* prev;
 };
 
 /* expresstion structs */
@@ -86,6 +87,11 @@ struct UnaryOp {
 struct TypeCast {
 	TreeType* datatype;
 	ExpNode* operand;
+};
+struct FuncCall {
+	TreeFunction* func;
+	ExpNode* argument; /* entire arg list is one expression */
+	TreeTypeList* generic_list;
 };
 
 struct TreeIf {
@@ -162,7 +168,8 @@ struct ExpNode {
 		EXP_DATATYPE,
 		EXP_LOCAL,
 		EXP_IDENTIFIER,
-		EXP_CAST
+		EXP_CAST,
+		EXP_FUNC_CALL
 	} type;
 	union {
 		spy_integer ival;
@@ -173,6 +180,7 @@ struct ExpNode {
 		UnaryOp* uval;
 		BinaryOp* bval;
 		TypeCast* cval;
+		FuncCall* fcval;
 	};
 };
 
