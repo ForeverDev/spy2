@@ -818,7 +818,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					if (!exact_datatype(a, b)) {
 						parse_error(
 							P,
-							"attempt to perform arithmetic (with operator '%s') on on-matching types (%s) and (%s)",
+							"attempt to use operator '%s' on non-matching types (%s) and (%s)",
 							tt_to_word(tree->bval->type),
 							tostring_datatype(a),
 							tostring_datatype(b)
@@ -885,7 +885,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					if (!field) {
 						parse_error(P, "'%s' isn't a valid field of struct '%s'", right->idval, type_struct->type_name);
 					}
-					if (field->datatype->plevel > 0) {
+					if (type_struct->plevel > 0) {
 						parse_error(P, "attempt to use the '.' operator on a pointer");
 					}		
 					return field->datatype;

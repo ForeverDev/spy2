@@ -1,13 +1,13 @@
-Thing: struct {
-	a: int;
-	b: int;
+Vector2: struct {
+	x: float;
+	y: float;
 };
 
-Test: struct {
-	x: int;
-	y: int;
-	z: Thing;
-};	
+Circle: struct {
+	center: Vector2^;
+	radius: float;
+};
 
-meme: Test;
-meme.z.a = 10;
+circle: Circle;
+circle.radius = 50.0;
+circle.center = (Vector2^)100;
