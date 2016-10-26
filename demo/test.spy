@@ -13,9 +13,3 @@ example<T>: () -> void {
 	x = (a + 13) * b;	/* isn't typechecked */
 	y = (b + 13) * 17;  /* is typechecked, and an error is reported */
 };
-
-factorial: (n: int) -> int {
-	if (n <= 1)
-		return 1;
-	return n * factorial(n - 1);
-}
