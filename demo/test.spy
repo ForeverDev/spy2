@@ -14,24 +14,13 @@ Rectangle: struct {
 	size: Vector2;
 };
 
-nested_call<T>: (object: T) -> void {
-	
-}
-
-new_instance<T>: (xpos: float, ypos: float) -> T {
-	
-	object: T;
-	object.position.x = xpos;
-	object.position.y = ypos;
-
-	return object;
-
-}
+special_cast<T0, T1>: (a: T0, b: T1) -> T0 = a + (T0)b; 
 
 main: () -> void {
-	circ: Circle;
-	rect: Rectangle;
+	
+	x: int;
 
-	circ = new_instance<Circle>(10.0, 20.0);
-	rect = new_instance<Rectangle>(10.0, 20.0);
+	x = special_cast<int, float>(10, 15.5);
+
+
 }	

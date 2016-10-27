@@ -901,6 +901,15 @@ static void
 assert_proper_param(ParseState* P, const char* func_id, int at_param, 
 					   const TreeType* expected, const TreeType* test
 					   ) {
+	printf("EXPECTED: %s\nGOT: %s\n", expected->type_name, test->type_name);
+	if (is_generic_type(P, expected->type_name)) {
+		printf("FOUND EXP\n");
+		expected = generic_from_id(P, expected->type_name);
+	}
+	if (is_generic_type(P, test->type_name)) {
+		printf("FOUND TEST\n");
+		test = generic_from_id(P, test->type_name);
+	}
 	if (!exact_datatype(expected, test)) {
 		parse_error(
 			P, 
@@ -931,6 +940,21 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 		case NODE_STATEMENT:
 			typecheck_expression(P, node->stateval);
 			break;
+		case NODE_RETURN: {
+			const TreeType* eval_ret = typecheck_expression(P, node->stateval);
+			TreeType* ret_type = generic_from_id(P, P->current_function->funcval->return_type->type_name);
+			if (!ret_type) {
+				ret_type = P->current_function->funcval->return_type;
+			}
+			if (!exact_datatype(eval_ret, ret_type)) {
+				parse_error(
+					P, 
+					"return statement evaluates to type (%s), expected type (%s)",
+					tostring_datatype(eval_ret),
+					tostring_datatype(ret_type)
+				);
+			}
+		}
 		case NODE_BLOCK: {
 			TreeNode* old = P->current_block;
 			P->current_block = node;
@@ -961,15 +985,24 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			return P->type_float;
 		case EXP_BYTE:
 			return P->type_byte;	
-		case EXP_CAST: 
+		case EXP_CAST: { 
 			/* if it's a cast to a generic type, bail */
+			TreeType* cast = generic_from_id(P, tree->cval->datatype->type_name);
+			printf("%p %p\n", cast, tree->cval->datatype);
 			if (tree->cval->datatype->is_generic) {
+				if (!cast) {
+					printf("BAIL A\n");
+					return GENERIC_BAIL;
+				}
+			}
+			const TreeType* op_type = typecheck_expression(P, tree->cval->operand);
+			if (op_type == GENERIC_BAIL && !generic_from_id(P, op_type->type_name)) {
+				printf("BAIL B\n");
 				return GENERIC_BAIL;
 			}
-			if (typecheck_expression(P, tree->cval->operand) == GENERIC_BAIL) {
-				return GENERIC_BAIL;
-			}
-			return tree->cval->datatype;
+			printf("NOBAIL\n");
+			return cast ?: tree->cval->datatype;
+		}
 		case EXP_BINOP:
 			switch (tree->bval->type) {
 				case TOK_PLUS:
@@ -1126,6 +1159,15 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				while (fparams && fparams->next) {
 					fparams = fparams->next;
 				}
+				P->generic_set = NULL;
+				TreeNode* old_func = P->current_function;
+				for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
+					if (i->type != NODE_FUNCTION) continue;
+					if (!strcmp(i->funcval->identifier, func->identifier)) {
+						P->current_function = i;
+						break;
+					}
+				}
 				/* set the current generic list */
 				if (call->generic_list) {
 					/* this is the list of types the user is passing to the function */
@@ -1214,8 +1256,8 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					sides[0] = sides[0]->bval->left;
 					fparams = fparams->prev;
 				}
+				P->current_function = old_func;
 				if (func->return_type->is_generic) {
-					printf("%p\n", P->generic_set);
 					return generic_from_id(P, func->return_type->type_name);	
 				}
 				return func->return_type;
@@ -2268,12 +2310,16 @@ parse_return(ParseState* P) {
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
 	node->stateval = parse_expression(P);
 	const TreeType* eval_ret = typecheck_expression(P, node->stateval);
-	if (eval_ret != GENERIC_BAIL && !exact_datatype(eval_ret, P->current_function->funcval->return_type)) {
+	TreeType* ret_type = generic_from_id(P, P->current_function->funcval->return_type->type_name);
+	if (!ret_type) {
+		ret_type = P->current_function->funcval->return_type;
+	}
+	if (eval_ret != GENERIC_BAIL && !exact_datatype(eval_ret, ret_type)) {
 		parse_error(
 			P, 
 			"return statement evaluates to type (%s), expected type (%s)",
 			tostring_datatype(eval_ret),
-			tostring_datatype(P->current_function->funcval->return_type)
+			tostring_datatype(ret_type)
 		);
 	}
 	P->token = P->token->next;
