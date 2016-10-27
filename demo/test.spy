@@ -1,11 +1,37 @@
-Vector3: struct {
+Vector2: struct {
 	x: float;
 	y: float;
-	z: float;
+	magnitude: float;
 };
 
-test: (a: int, b: int, c: int) -> int = a;
+Circle: struct {
+	position: Vector2;
+	radius: float;
+};	
+
+Rectangle: struct {
+	position: Vector2;
+	size: Vector2;
+};
+
+nested_call<T>: (object: T) -> void {
+	
+}
+
+new_instance<T>: (xpos: float, ypos: float) -> T {
+	
+	object: T;
+	object.position.x = xpos;
+	object.position.y = ypos;
+
+	return object;
+
+}
 
 main: () -> void {
-	test(10, 20);
+	circ: Circle;
+	rect: Rectangle;
+
+	circ = new_instance<Circle>(10.0, 20.0);
+	rect = new_instance<Rectangle>(10.0, 20.0);
 }	

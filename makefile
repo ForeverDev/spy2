@@ -15,6 +15,7 @@ else
 	cp spy.exe /usr/local/bin/spy
 endif
 	rm spy.exe
+	rm -Rf build
 
 build:
 	mkdir build

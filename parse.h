@@ -24,6 +24,7 @@ typedef struct TreeDecl TreeDecl;
 typedef struct TreeFunction TreeFunction;
 typedef struct TreeVariable TreeVariable;
 typedef struct TreeVariableList TreeVariableList;
+typedef struct TreeGenericSet TreeGenericSet;
 typedef struct LiteralList LiteralList;
 typedef enum TreeNodeType TreeNodeType;
 
@@ -92,6 +93,11 @@ struct FuncCall {
 	TreeFunction* func;
 	ExpNode* argument; /* entire arg list is one expression */
 	TreeTypeList* generic_list;
+};
+struct TreeGenericSet {
+	char* generic_id; /* generic identifier */
+	TreeType* datatype; /* corresponding datatype */
+	TreeGenericSet* next; /* just make this a list, no need for a super struct */
 };
 
 struct TreeIf {
@@ -205,6 +211,7 @@ struct ParseState {
 	TreeNode* current_loop;
 	TreeNode* root_block;
 	ParseOptions* options;
+	TreeGenericSet* generic_set;
 	const TreeType* type_integer;
 	const TreeType* type_float;
 	const TreeType* type_byte;

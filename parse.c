@@ -886,6 +886,17 @@ tree_datatype(ParseState* P, ExpNode* tree) {
 }
 
 /* helper function for typecheck_expression */
+static TreeType*
+generic_from_id(ParseState* P, const char* id) {
+	for (TreeGenericSet* i = P->generic_set; i; i = i->next) {
+		if (!strcmp(i->generic_id, id)) {
+			return i->datatype;
+		}
+	}
+	return NULL;
+}
+
+/* helper function for typecheck_expression */
 static void
 assert_proper_param(ParseState* P, const char* func_id, int at_param, 
 					   const TreeType* expected, const TreeType* test
@@ -899,6 +910,44 @@ assert_proper_param(ParseState* P, const char* func_id, int at_param,
 			tostring_datatype(test),
 			tostring_datatype(expected)	
 		);
+	}
+}
+
+/* helper function for typecheck_expression */
+static void
+typecheck_with_types(ParseState* P, TreeNode* node) {
+	switch (node->type) {
+		case NODE_IF:
+			typecheck_expression(P, node->ifval->condition);
+			break;
+		case NODE_FOR:
+			typecheck_expression(P, node->forval->initializer);
+			typecheck_expression(P, node->forval->condition);
+			typecheck_expression(P, node->forval->statement);
+			break;
+		case NODE_WHILE:
+			typecheck_expression(P, node->whileval->condition);
+			break;
+		case NODE_STATEMENT:
+			typecheck_expression(P, node->stateval);
+			break;
+		case NODE_BLOCK: {
+			TreeNode* old = P->current_block;
+			P->current_block = node;
+			for (TreeNode* i = node->blockval->child; i; i = i->next) {
+				typecheck_with_types(P, i);
+			}
+			P->current_block = old;
+			break;
+		}
+		case NODE_FUNCTION: {
+			TreeNode* old = P->current_function;
+			P->current_function = node;
+			typecheck_with_types(P, node->funcval->child);
+			P->current_function = old;
+			break;
+		}
+			
 	}
 }
 
@@ -995,14 +1044,30 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 							parse_error(P, "undeclared identifier '%s'", left->idval);
 						}
 						if (!var->datatype->sval) {
-							parse_error(P, "attempt to use the '.' operator on non-struct variable '%s'", left->idval);
+							if (var->datatype->is_generic) {
+								if (P->generic_set) {
+									type_struct = generic_from_id(P, var->datatype->type_name);
+								} else {
+									return GENERIC_BAIL;
+								}
+							} else {
+								parse_error(P, "attempt to use the '.' operator on non-struct variable '%s'", left->idval);
+							}
+						} else {
+							type_struct = var->datatype; 
 						}
-						type_struct = var->datatype; 
 					} else if (left->type == EXP_BINOP && left->bval->type == TOK_PERIOD) {
 						type_struct = typecheck_expression(P, left);
 					}
 					if (type_struct == GENERIC_BAIL) {
 						return GENERIC_BAIL;
+					}
+					if (type_struct->is_generic) {
+						if (P->generic_set) {
+							type_struct = generic_from_id(P, type_struct->type_name);
+						} else {
+							return GENERIC_BAIL;
+						}
 					}
 					if (!type_struct || !type_struct->sval) {
 						parse_error(P, "attempt to use the '.' operator on something that isn't a struct");
@@ -1029,70 +1094,131 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					parse_error(P, "undeclared identifier '%s'", tree->idval);	
 				}
 				if (var->datatype->is_generic) {
-					return GENERIC_BAIL;
+					if (P->generic_set) {
+						return generic_from_id(P, var->datatype->type_name);	
+					} else {
+						return GENERIC_BAIL;	
+					}
 				}
 				return var->datatype;
 			}
 			case EXP_FUNC_CALL: {
+				FuncCall* call = tree->fcval;
 				/* the current comma being scanned */
-				ExpNode* scan = tree->fcval->argument;	
-				/* the list of function arguments */
-				TreeVariableList* fparams = tree->fcval->func->params;
-				/* set to the final param type */
-				while (fparams->next) {
-					fparams = fparams->next;
-				}
-				unsigned int expected_params = tree->fcval->func->nparams;
-				unsigned int at_param = expected_params;
-				if (scan->type == EXP_BINOP && scan->bval->type == TOK_COMMA) {
-					while (scan->type == EXP_BINOP && scan->bval->type == TOK_COMMA) {
-						/* the right operand of the comma is the argument, the left
-						 * side is either another comma or the first scanument */
-						ExpNode* left = scan->bval->left;
-						ExpNode* right = scan->bval->right;
-						int do_both = !(left->type == EXP_BINOP && left->bval->type == TOK_COMMA);
-						if (do_both) {
-							if (!fparams || !fparams->prev) {
-								parse_error(P, "wrong num");
-							}
-						} else {
-							if (!fparams) {
-								parse_error(P, "wrong num");
-							}
-						}
-						assert_proper_param(
-							P,
-							tree->fcval->func->identifier,
-							at_param,
-							fparams->variable->datatype,
-							typecheck_expression(P, right)	
-						);
-						/* check if there are no more commas... */
-						if (do_both) {
-							assert_proper_param(
-								P,
-								tree->fcval->func->identifier,
-								at_param,
-								fparams->prev->variable->datatype,
-								typecheck_expression(P, right)	
-							);
-							break;
-						}
-						scan = left;
-						fparams = fparams->prev;
-					}
-				} else {
-					assert_proper_param(
+				ExpNode* scan = call->argument;	
+				/* the function being called */
+				TreeFunction* func = call->func;
+
+				unsigned int expected_params = func->nparams;
+
+				if (!scan && expected_params > 0) {
+					parse_error(
 						P, 
-						tree->fcval->func->identifier, 
-						at_param, 
-						fparams->variable->datatype, 
-						typecheck_expression(P, scan)
+						"passing incorrect number of parameters to function '%s'. expected %d, got 0",
+						func->identifier,
+						expected_params
 					);
 				}
-				if (!fparams->prev) {
-					parse_error(P, "too many");
+
+				/* the list of function arguments */
+				TreeVariableList* fparams = func->params;
+				/* set to the final param type */
+				while (fparams && fparams->next) {
+					fparams = fparams->next;
 				}
+				/* set the current generic list */
+				if (call->generic_list) {
+					/* this is the list of types the user is passing to the function */
+					TreeTypeList* at_generic = call->generic_list;
+					for (LiteralList* i = func->generics; i; i = i->next) {
+						if (!at_generic) {
+							parse_error(P, "too few type parameters for function '%s'", func->identifier);
+						}
+						TreeGenericSet* gen = malloc(sizeof(TreeGenericSet));
+						gen->generic_id = i->literal;
+						gen->datatype = at_generic->datatype;
+						gen->next = NULL;
+						if (!P->generic_set) {
+							P->generic_set = gen;
+						} else {
+							TreeGenericSet* i;
+							for (i = P->generic_set; i->next; i = i->next);
+							i->next = gen;
+						}
+						at_generic = at_generic->next;
+					}
+					if (at_generic) {
+						parse_error(P, "too many type parameters for function '%s'", func->identifier);
+					}
+					/* find the function and do a full typecheck */
+					for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
+						if (i->type != NODE_FUNCTION) continue;
+						if (!strcmp(i->funcval->identifier, func->identifier)) {
+							typecheck_with_types(P, i);
+							break;
+						}
+					}
+				}
+				if (!scan && expected_params == 0) {
+					return func->return_type;
+				} 
+				unsigned int at_param = expected_params;
+				unsigned int given_params = 0;
+				int on_comma = scan->type == EXP_BINOP && scan->bval->type == TOK_COMMA;
+				/* if there is a comma, the number of params is (num_commas + 1) */
+				if (on_comma) {
+					given_params = 1;
+					ExpNode* counter = scan;
+					while (counter && counter->type == EXP_BINOP && counter->bval->type == TOK_COMMA) {
+						counter = counter->bval->left;
+						given_params++;
+					}
+				} else if (call->argument) {
+					given_params = 1;
+				}
+				/* check that the user is passing the correct number of params */
+				if (given_params != expected_params) {
+					parse_error(
+						P, 
+						"passing incorrect number of parameters to function '%s'. expected %d, got %d",
+						func->identifier,
+						expected_params,
+						given_params
+					);
+				}
+				ExpNode* sides[2] = {scan, NULL};
+				for (int i = 0; sides[0] && i < given_params; i++) {
+					/* the current argument */
+					if (sides[1]) {
+						assert_proper_param(
+							P,
+							func->identifier,
+							at_param,
+							fparams->variable->datatype,
+							typecheck_expression(P, sides[1])
+						);
+						at_param--;
+					}
+					/* if sides[0] isn't a comma, it's an argument, so typecheck it */
+					if (!(sides[0]->type == EXP_BINOP && sides[0]->bval->type == TOK_COMMA)) {
+						assert_proper_param(
+							P,
+							func->identifier,
+							at_param,
+							fparams->variable->datatype,
+							typecheck_expression(P, sides[0])
+						);
+						break;
+					}
+					sides[1] = sides[0]->bval->right;
+					sides[0] = sides[0]->bval->left;
+					fparams = fparams->prev;
+				}
+				if (func->return_type->is_generic) {
+					printf("%p\n", P->generic_set);
+					return generic_from_id(P, func->return_type->type_name);	
+				}
+				return func->return_type;
 			}
 			
 	}
@@ -1454,10 +1580,7 @@ parse_function_call(ParseState* P) {
 		mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR);
 		call->fcval->argument = parse_expression(P);
 		P->end_mark = end_mark; /* restore end mark */
-		print_expression(call->fcval->argument, 0);
-	} else {
-		P->token = P->token->next;
-	}
+	} 
 	return call;
 }
 
@@ -1879,6 +2002,7 @@ static TreeNode*
 parse_statement(ParseState* P) {
 	TreeNode* node = new_node(P, NODE_STATEMENT);
 	node->stateval = parse_expression(P);
+	P->generic_set = NULL;
 	typecheck_expression(P, node->stateval);
 	return node;
 }
@@ -2265,6 +2389,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 	P->token = L->tokens;
 	P->end_mark = NULL;	
 	P->current_function = NULL;
+	P->generic_set = NULL;
 	P->current_loop = NULL;
 	P->to_append = NULL;
 	P->defined_types = malloc(sizeof(TreeTypeList));
