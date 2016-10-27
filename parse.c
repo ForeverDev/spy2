@@ -899,15 +899,11 @@ generic_from_id(ParseState* P, const char* id) {
 /* helper function for typecheck_expression */
 static void
 assert_proper_param(ParseState* P, const char* func_id, int at_param, 
-					   const TreeType* expected, const TreeType* test
-					   ) {
-	printf("EXPECTED: %s\nGOT: %s\n", expected->type_name, test->type_name);
+					const TreeType* expected, const TreeType* test) {
 	if (is_generic_type(P, expected->type_name)) {
-		printf("FOUND EXP\n");
 		expected = generic_from_id(P, expected->type_name);
 	}
 	if (is_generic_type(P, test->type_name)) {
-		printf("FOUND TEST\n");
 		test = generic_from_id(P, test->type_name);
 	}
 	if (!exact_datatype(expected, test)) {
@@ -988,19 +984,15 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 		case EXP_CAST: { 
 			/* if it's a cast to a generic type, bail */
 			TreeType* cast = generic_from_id(P, tree->cval->datatype->type_name);
-			printf("%p %p\n", cast, tree->cval->datatype);
 			if (tree->cval->datatype->is_generic) {
 				if (!cast) {
-					printf("BAIL A\n");
 					return GENERIC_BAIL;
 				}
 			}
 			const TreeType* op_type = typecheck_expression(P, tree->cval->operand);
 			if (op_type == GENERIC_BAIL && !generic_from_id(P, op_type->type_name)) {
-				printf("BAIL B\n");
 				return GENERIC_BAIL;
 			}
-			printf("NOBAIL\n");
 			return cast ?: tree->cval->datatype;
 		}
 		case EXP_BINOP:
@@ -1229,7 +1221,37 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					);
 				}
 				ExpNode* sides[2] = {scan, NULL};
+				if (scan->type == EXP_BINOP && scan->bval->type == TOK_COMMA) {
+					sides[1] = scan->bval->right;
+				}
 				for (int i = 0; sides[0] && i < given_params; i++) {
+					int left_is_comma = (
+						sides[0]->type == EXP_BINOP
+						&& sides[0]->bval->type == TOK_COMMA
+					);	
+					if (left_is_comma) {
+						sides[1] = sides[0]->bval->right;
+					}
+					if (!left_is_comma) {
+						assert_proper_param(
+							P,
+							func->identifier,
+							at_param,
+							fparams->variable->datatype,
+							typecheck_expression(P, sides[0])
+						);
+						break;
+						/*
+						assert_proper_param(
+							P,
+							func->identifier,
+							at_param,
+							fparams->variable->datatype,
+							typecheck_expression(P, sides[1])
+						);
+						break;
+						*/
+					}
 					/* the current argument */
 					if (sides[1]) {
 						assert_proper_param(
@@ -1242,17 +1264,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 						at_param--;
 					}
 					/* if sides[0] isn't a comma, it's an argument, so typecheck it */
-					if (!(sides[0]->type == EXP_BINOP && sides[0]->bval->type == TOK_COMMA)) {
-						assert_proper_param(
-							P,
-							func->identifier,
-							at_param,
-							fparams->variable->datatype,
-							typecheck_expression(P, sides[0])
-						);
-						break;
-					}
-					sides[1] = sides[0]->bval->right;
 					sides[0] = sides[0]->bval->left;
 					fparams = fparams->prev;
 				}
@@ -2045,6 +2056,7 @@ parse_statement(ParseState* P) {
 	TreeNode* node = new_node(P, NODE_STATEMENT);
 	node->stateval = parse_expression(P);
 	P->generic_set = NULL;
+	print_expression(node->stateval, 0);
 	typecheck_expression(P, node->stateval);
 	return node;
 }
