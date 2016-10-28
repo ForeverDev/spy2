@@ -962,10 +962,15 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 			break;
 		}
 		case NODE_FUNCTION: {
-			TreeNode* old = P->current_function;
+			/* TODO make save_state() and revert_state() */
+			TreeNode* save_func = P->current_function;
+			TreeNode* save_block = P->current_block;
+			TreeGenericSet* save_set = P->generic_set;
 			P->current_function = node;
 			typecheck_with_types(P, node->funcval->child);
-			P->current_function = old;
+			P->current_block = save_block;
+			P->current_function = save_func;
+			P->generic_set = save_set;
 			break;
 		}
 			
@@ -1116,7 +1121,9 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			}
 			case EXP_IDENTIFIER: {
 				TreeVariable* var = get_local(P, tree->idval);
+				printf("SCANNING FUNCTION %s\n", P->current_function->funcval->identifier);
 				if (!var) {
+					/* why is it searching for args from the wrong function?? */
 					parse_error(P, "undeclared identifier '%s'", tree->idval);	
 				}
 				if (var->datatype->is_generic) {
@@ -1197,9 +1204,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 							 * foo<T>: (n: T) -> T = bar<T>(n);
 
 							 */
-							TreeGenericSet* save = P->generic_set;
 							typecheck_with_types(P, i);
-							P->generic_set = save;
 							break;
 						}
 					}

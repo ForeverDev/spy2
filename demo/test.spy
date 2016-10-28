@@ -1,12 +1,16 @@
-func_two<T>: (n: T) -> T = n;
-func_one<T>: (n: T) -> T = func_two<T>(n);
+bar<T>: (c: T) -> T {
+	return c;
+}
+
+foo<T, U>: (a: T, b: U) -> T {
+	return bar<T>(a);
+}
 
 main: () -> void {
 	
-	a: int;
-	b: float;
+	x: int;
+
+	x = foo<int, float>(10, 15.5);	
 		
-	a = func_two<int>(10);
-	b = func_one<float>(10.0);
 }	
 
