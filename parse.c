@@ -942,6 +942,7 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 			if (!ret_type) {
 				ret_type = P->current_function->funcval->return_type;
 			}
+			eval_ret = generic_from_id(P, eval_ret->type_name) ?: eval_ret;  
 			if (!exact_datatype(eval_ret, ret_type)) {
 				parse_error(
 					P, 
@@ -1151,6 +1152,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				while (fparams && fparams->next) {
 					fparams = fparams->next;
 				}
+				TreeGenericSet* old_set = P->generic_set;
 				P->generic_set = NULL;
 				TreeNode* old_func = P->current_function;
 				for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
@@ -1188,7 +1190,16 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
 						if (i->type != NODE_FUNCTION) continue;
 						if (!strcmp(i->funcval->identifier, func->identifier)) {
+							/* save and then revert the genetic_set so that
+							 * nested generic calls work, e.g.
+							 *
+							 * bar<T>: (n: T) -> T = n;
+							 * foo<T>: (n: T) -> T = bar<T>(n);
+
+							 */
+							TreeGenericSet* save = P->generic_set;
 							typecheck_with_types(P, i);
+							P->generic_set = save;
 							break;
 						}
 					}
@@ -1267,10 +1278,14 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					sides[0] = sides[0]->bval->left;
 					fparams = fparams->prev;
 				}
-				P->current_function = old_func;
 				if (func->return_type->is_generic) {
-					return generic_from_id(P, func->return_type->type_name);	
+					TreeType* ret = generic_from_id(P, func->return_type->type_name);
+					P->current_function = old_func;
+					P->generic_set = old_set;
+					return ret;	
 				}
+				P->generic_set = old_set;
+				P->current_function = old_func;
 				return func->return_type;
 			}
 			
@@ -2326,6 +2341,7 @@ parse_return(ParseState* P) {
 	if (!ret_type) {
 		ret_type = P->current_function->funcval->return_type;
 	}
+	//eval_ret = generic_from_id(P, eval_ret->type_name) ?: eval_ret;  
 	if (eval_ret != GENERIC_BAIL && !exact_datatype(eval_ret, ret_type)) {
 		parse_error(
 			P, 

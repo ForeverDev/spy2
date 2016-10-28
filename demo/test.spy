@@ -1,17 +1,12 @@
-generic_function<T, U>: (value_one: T, value_two: U, value_three: U) -> T {
-	return value_one + (T)value_two + (T)value_three;
-}
-
-regular_function: (value_one: int, value_two: float, value_three: float) -> int {
-	return value_one + (int)value_two + (int)value_three;
-}
+func_two<T>: (n: T) -> T = n;
+func_one<T>: (n: T) -> T = func_two<T>(n);
 
 main: () -> void {
 	
-	value_a: int;
-	value_b: int;
-
-	value_a = generic_function<int, float>(1, 2.0, 3.5);	
-	value_b = regular_function(1, 2.0, 3.5);
-
+	a: int;
+	b: float;
+		
+	a = func_two<int>(10);
+	b = func_one<float>(10.0);
 }	
+
