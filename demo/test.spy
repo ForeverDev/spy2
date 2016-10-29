@@ -1,16 +1,19 @@
-bar<T>: (c: T) -> T {
-	return c;
-}
+Vector: struct {
+	x: float;
+	y: float;	
+};
 
-foo<T, U>: (a: T, b: U) -> T {
-	return bar<T>(a);
-}
+foo: (a: int, b: float) -> int = a + (int)b;
+bar: (a: int) -> int = a;
 
 main: () -> void {
 	
-	x: int;
-
-	x = foo<int, float>(10, 15.5);	
+	vec: Vector;
+	vec.x = 15.5;
+	vec.y = 42.0;	
+	
+	bar((int)vec.x);
+	foo((int)vec.x, vec.y);
 		
 }	
 

@@ -886,6 +886,22 @@ tree_datatype(ParseState* P, ExpNode* tree) {
 }
 
 /* helper function for typecheck_expression */
+static void
+save_state(ParseState* P) {
+	P->saved_state.block = P->current_block; 
+	P->saved_state.function = P->current_function;
+	P->saved_state.generic_set = P->generic_set;
+}
+
+/* helper function for typecheck_expression */
+static void
+revert_state(ParseState* P) {
+	P->current_block = P->saved_state.block;
+	P->current_function = P->saved_state.function;
+	P->generic_set = P->saved_state.generic_set;
+}
+
+/* helper function for typecheck_expression */
 static TreeType*
 generic_from_id(ParseState* P, const char* id) {
 	for (TreeGenericSet* i = P->generic_set; i; i = i->next) {
@@ -917,6 +933,14 @@ assert_proper_param(ParseState* P, const char* func_id, int at_param,
 		);
 	}
 }
+
+/* helper function for typecheck_expression */
+/*
+static TreeType*
+real_type(ParseState* P, TreeType* type) {
+	
+}
+*/
 
 /* helper function for typecheck_expression */
 static void
@@ -962,18 +986,9 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 			break;
 		}
 		case NODE_FUNCTION: {
-			/* TODO make save_state() and revert_state() */
-			TreeNode* save_func = P->current_function;
-			TreeNode* save_block = P->current_block;
-			TreeGenericSet* save_set = P->generic_set;
-			P->current_function = node;
 			typecheck_with_types(P, node->funcval->child);
-			P->current_block = save_block;
-			P->current_function = save_func;
-			P->generic_set = save_set;
 			break;
 		}
-			
 	}
 }
 
@@ -989,17 +1004,12 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			return P->type_byte;	
 		case EXP_CAST: { 
 			/* if it's a cast to a generic type, bail */
-			TreeType* cast = generic_from_id(P, tree->cval->datatype->type_name);
-			if (tree->cval->datatype->is_generic) {
-				if (!cast) {
-					return GENERIC_BAIL;
-				}
-			}
-			const TreeType* op_type = typecheck_expression(P, tree->cval->operand);
-			if (op_type == GENERIC_BAIL && !generic_from_id(P, op_type->type_name)) {
-				return GENERIC_BAIL;
-			}
-			return cast ?: tree->cval->datatype;
+			TreeType* cast = tree->cval->datatype;
+			typecheck_expression(P, tree->cval->operand);
+			/* TODO make sure it's a valid cast, e.g. an object
+			 * cannot be cast to an integer but it can be cast
+			 * to a pointer */
+			return cast;
 		}
 		case EXP_BINOP:
 			switch (tree->bval->type) {
@@ -1018,9 +1028,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_DIVBY: {
 					const TreeType* a = typecheck_expression(P, tree->bval->left);
 					const TreeType* b = typecheck_expression(P, tree->bval->right);
-					if (a == GENERIC_BAIL || b == GENERIC_BAIL) {
-						return GENERIC_BAIL;
-					}
 					if (!exact_datatype(a, b)) {
 						parse_error(
 							P,
@@ -1043,9 +1050,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_XORBY: {
 					const TreeType* a = typecheck_expression(P, tree->bval->left);
 					const TreeType* b = typecheck_expression(P, tree->bval->right);
-					if (a == GENERIC_BAIL || b == GENERIC_BAIL) {
-						return GENERIC_BAIL;
-					}
 					/* in bitwise operators, both operands must be integers (or pointers) */
 					if (
 						(strcmp(a->type_name, "int") && a->plevel == 0) 
@@ -1074,31 +1078,9 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 						if (!var) {
 							parse_error(P, "undeclared identifier '%s'", left->idval);
 						}
-						if (!var->datatype->sval) {
-							if (var->datatype->is_generic) {
-								if (P->generic_set) {
-									type_struct = generic_from_id(P, var->datatype->type_name);
-								} else {
-									return GENERIC_BAIL;
-								}
-							} else {
-								parse_error(P, "attempt to use the '.' operator on non-struct variable '%s'", left->idval);
-							}
-						} else {
-							type_struct = var->datatype; 
-						}
+						type_struct = var->datatype; 
 					} else if (left->type == EXP_BINOP && left->bval->type == TOK_PERIOD) {
 						type_struct = typecheck_expression(P, left);
-					}
-					if (type_struct == GENERIC_BAIL) {
-						return GENERIC_BAIL;
-					}
-					if (type_struct->is_generic) {
-						if (P->generic_set) {
-							type_struct = generic_from_id(P, type_struct->type_name);
-						} else {
-							return GENERIC_BAIL;
-						}
 					}
 					if (!type_struct || !type_struct->sval) {
 						parse_error(P, "attempt to use the '.' operator on something that isn't a struct");
@@ -1121,17 +1103,9 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			}
 			case EXP_IDENTIFIER: {
 				TreeVariable* var = get_local(P, tree->idval);
-				printf("SCANNING FUNCTION %s\n", P->current_function->funcval->identifier);
 				if (!var) {
 					/* why is it searching for args from the wrong function?? */
 					parse_error(P, "undeclared identifier '%s'", tree->idval);	
-				}
-				if (var->datatype->is_generic) {
-					if (P->generic_set) {
-						return generic_from_id(P, var->datatype->type_name);	
-					} else {
-						return GENERIC_BAIL;	
-					}
 				}
 				return var->datatype;
 			}
@@ -1159,9 +1133,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				while (fparams && fparams->next) {
 					fparams = fparams->next;
 				}
-				TreeGenericSet* old_set = P->generic_set;
-				P->generic_set = NULL;
-				TreeNode* old_func = P->current_function;
+				save_state(P);
 				for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
 					if (i->type != NODE_FUNCTION) continue;
 					if (!strcmp(i->funcval->identifier, func->identifier)) {
@@ -1204,7 +1176,10 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 							 * foo<T>: (n: T) -> T = bar<T>(n);
 
 							 */
+							save_state(P);
+							P->current_function = i;
 							typecheck_with_types(P, i);
+							revert_state(P);
 							break;
 						}
 					}
@@ -1283,14 +1258,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					sides[0] = sides[0]->bval->left;
 					fparams = fparams->prev;
 				}
-				if (func->return_type->is_generic) {
-					TreeType* ret = generic_from_id(P, func->return_type->type_name);
-					P->current_function = old_func;
-					P->generic_set = old_set;
-					return ret;	
-				}
-				P->generic_set = old_set;
-				P->current_function = old_func;
 				return func->return_type;
 			}
 			
@@ -2076,7 +2043,6 @@ parse_statement(ParseState* P) {
 	TreeNode* node = new_node(P, NODE_STATEMENT);
 	node->stateval = parse_expression(P);
 	P->generic_set = NULL;
-	print_expression(node->stateval, 0);
 	typecheck_expression(P, node->stateval);
 	return node;
 }

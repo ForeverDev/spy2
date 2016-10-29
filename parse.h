@@ -216,6 +216,11 @@ struct ParseState {
 	const TreeType* type_float;
 	const TreeType* type_byte;
 	const TreeType* type_void;
+	struct SavedState {
+		TreeNode* block;
+		TreeNode* function;
+		TreeGenericSet* generic_set;
+	} saved_state;
 };
 
 ParseState* generate_tree(LexState*, ParseOptions*);
