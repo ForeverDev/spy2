@@ -13,7 +13,7 @@
 #define MOD_CFUNC (0x1 << 3)
 #define MOD_COUNT 4
 
-#define GENERIC_BAIL ((TreeType *)-1)
+#define GENERIC_TYPE ((TreeType *)-1)
 
 typedef struct ExpStack ExpStack;
 typedef struct OperatorInfo OperatorInfo;
@@ -77,11 +77,11 @@ static void append(ParseState*, TreeNode*);
 static int is_keyword(const char*);
 static int get_modifier(const char*);
 static int is_datatype(ParseState*, const char*);
-static int is_generic_type(ParseState*, const char*);
+static int get_generic_index(ParseState*, const char*);
 static TreeVariable* get_local(ParseState*, const char*);
 static TreeFunction* get_function(ParseState*, const char*);
 static Token* peek(ParseState*, int);
-static const TreeType* typecheck_expression(ParseState*, ExpNode*);
+static TreeType* typecheck_expression(ParseState*, ExpNode*);
 static int exact_datatype(const TreeType*, const TreeType*);
 static char* tostring_datatype(const TreeType*);
 
@@ -399,7 +399,7 @@ register_local(ParseState* P, TreeVariable* var) {
 
 static int 
 is_datatype(ParseState* P, const char* type_name) {
-	if (is_generic_type(P, type_name)) {
+	if (get_generic_index(P, type_name) != -1) {
 		return 1;
 	}
 	for (TreeTypeList* i = P->defined_types; i && i->datatype; i = i->next) {
@@ -813,16 +813,24 @@ append(ParseState* P, TreeNode* node) {
 	}
 }
 
-/* tells whether the identifier is a generic type */
+/* tells whether or not a typename is a generic type.  for example:
+ *
+ * foo<T, U>: () -> void;
+ *
+ * get_generic_index(P, "T") --> TRUE
+ *
+ */
 static int 
-is_generic_type(ParseState* P, const char* identifier) {
-	if (!P->current_function) return 0;
+get_generic_index(ParseState* P, const char* identifier) {
+	if (!P->current_function) return -1;
+	int index = 0;
 	for (LiteralList* i = P->current_function->funcval->generics; i; i = i->next) {
 		if (!strcmp(i->literal, identifier)) {
-			return 1;
+			return index;
 		}
+		index++;
 	}
-	return 0;
+	return -1;
 }
 
 static TreeFunction*
@@ -881,39 +889,98 @@ tree_datatype(ParseState* P, ExpNode* tree) {
 	return NULL;
 }
 
+/* used by typecheck_expression and its helper functions */
+static int typecheck_bail = 0;
+
 /* helper function for typecheck_expression */
 static void
 save_state(ParseState* P) {
-	P->saved_state.block = P->current_block; 
-	P->saved_state.function = P->current_function;
-	P->saved_state.generic_set = P->generic_set;
+	CallState* state = malloc(sizeof(CallState));
+	state->block = P->current_block;
+	state->function = P->current_function;
+	state->generic_set = P->generic_set;
+	state->next = NULL;
+	if (!P->call_state) {
+		P->call_state = state;
+		state->prev = NULL;
+	} else {
+		CallState* i;
+		for (i = P->call_state; i->next; i = i->next);
+		i->next = state;
+		state->prev = i;
+	}
 }
 
 /* helper function for typecheck_expression */
 static void
 revert_state(ParseState* P) {
-	P->current_block = P->saved_state.block;
-	P->current_function = P->saved_state.function;
-	P->generic_set = P->saved_state.generic_set;
+	if (!P->call_state) {
+		parse_error(P, "no state to revert to...?");
+	}
+	CallState* pop;
+	if (!P->call_state->next) {
+		pop = P->call_state;
+		P->call_state = NULL;
+	} else {
+		CallState* i;
+		for (i = P->call_state; i->next; i = i->next);
+		if (i->prev) {
+			i->prev->next = NULL;
+		}
+		pop = i;
+	}
+	P->current_block = pop->block;
+	P->current_function = pop->function;
+	P->generic_set = pop->generic_set;
 }
 
 /* helper function for typecheck_expression */
-/*
 static TreeType*
-generic_from_id(ParseState* P, const char* id) {
-	for (* i = P->generic_set; i; i = i->next) {
-		if (!strcmp(i->generic_id, id)) {
-			return i->datatype;
-		}
+real_type(ParseState* P, TreeType* datatype) {
+	if (datatype == GENERIC_TYPE) {
+		return GENERIC_TYPE;
 	}
-	return NULL;
+	int generic_index = get_generic_index(P, datatype->type_name);
+	if (!P->generic_set && generic_index != -1) {
+		return GENERIC_TYPE;	
+	}
+	if (generic_index == -1) {
+		return datatype;
+	}
+	TreeTypeList* i = P->generic_set;
+	for (int j = 0; j < generic_index; j++) {
+		i = i->next;
+	}
+	/* i now points to the correct datatype in the set */
+	return i->datatype;
 }
-*/
+
+/* helper function for typecheck_expression */
+static inline int 
+should_bail() {
+	if (typecheck_bail) return 1;
+	return 0;
+}
+
+/* helper function for typecheck_expression 
+ * called when an expression should no longer
+ * be typechecked, e.g. if there is an unknown
+ * generic type in the expression */
+static inline void
+set_bail(int b) {
+	typecheck_bail = b;
+}
 
 /* helper function for typecheck_expression */
 static void
 assert_proper_param(ParseState* P, const char* func_id, int at_param, 
-					const TreeType* expected, const TreeType* test) {
+					TreeType* expected, TreeType* test) {
+	expected = real_type(P, expected);
+	test = real_type(P, test);
+	if (test == GENERIC_TYPE || expected == GENERIC_TYPE) {
+		set_bail(1);
+		return;
+	}
 	if (!exact_datatype(expected, test)) {
 		parse_error(
 			P, 
@@ -924,20 +991,6 @@ assert_proper_param(ParseState* P, const char* func_id, int at_param,
 			tostring_datatype(expected)	
 		);
 	}
-}
-
-/* helper function for typecheck_expression */
-static TreeType*
-real_type(ParseState* P, TreeType* datatype) {
-	if (!is_generic_type(P, datatype->type_name)) {
-		return datatype;
-	}
-	for (TreeTypeList* i = P->generic_set; i; i = i->next) {
-		if (!strcmp(i->datatype->type_name, datatype->type_name)) {
-			return datatype;
-		}
-	}
-	return NULL;
 }
 
 /* helper function for typecheck_expression */
@@ -959,8 +1012,11 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 			typecheck_expression(P, node->stateval);
 			break;
 		case NODE_RETURN: {
-			const TreeType* eval_ret = typecheck_expression(P, node->stateval);
-			TreeType* ret_type = P->current_function->funcval->return_type;
+			TreeType* eval_ret = typecheck_expression(P, node->stateval);
+			TreeType* ret_type = real_type(P, P->current_function->funcval->return_type);
+			if (should_bail()) {
+				return;
+			}
 			if (!exact_datatype(eval_ret, ret_type)) {
 				parse_error(
 					P, 
@@ -986,8 +1042,13 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 	}
 }
 
+/* no need for call to BAIL() because bail flag already set */
+#define CHKBAIL() if (should_bail()) return GENERIC_TYPE
+#define CHKFLAG(v) if (v == GENERIC_TYPE) {typecheck_bail = 1; return GENERIC_TYPE;}
+
+
 /* completely validates an expression tree and returns its type */
-static const TreeType*
+static TreeType*
 typecheck_expression(ParseState* P, ExpNode* tree) {
 	switch (tree->type) {
 		case EXP_INTEGER:
@@ -998,8 +1059,13 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			return P->type_byte;	
 		case EXP_CAST: { 
 			/* if it's a cast to a generic type, bail */
-			TreeType* cast = tree->cval->datatype;
+			TreeType* cast = real_type(P, tree->cval->datatype);
 			typecheck_expression(P, tree->cval->operand);
+			/* dont chkflag cast until after the operand is typechecked...
+			 * this will make things like (T)(10.5 + 13) error correctly 
+			 * (assuming there are no implicit casts) */
+			CHKFLAG(cast);
+			CHKBAIL();
 			/* TODO make sure it's a valid cast, e.g. an object
 			 * cannot be cast to an integer but it can be cast
 			 * to a pointer */
@@ -1020,8 +1086,10 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_DECBY:
 				case TOK_MULBY:
 				case TOK_DIVBY: {
-					const TreeType* a = typecheck_expression(P, tree->bval->left);
-					const TreeType* b = typecheck_expression(P, tree->bval->right);
+					TreeType* a = typecheck_expression(P, tree->bval->left);
+					CHKFLAG(a);
+					TreeType* b = typecheck_expression(P, tree->bval->right);
+					CHKFLAG(b);
 					if (!exact_datatype(a, b)) {
 						parse_error(
 							P,
@@ -1042,8 +1110,10 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_ANDBY:
 				case TOK_ORBY:
 				case TOK_XORBY: {
-					const TreeType* a = typecheck_expression(P, tree->bval->left);
-					const TreeType* b = typecheck_expression(P, tree->bval->right);
+					TreeType* a = typecheck_expression(P, tree->bval->left);
+					CHKFLAG(a);
+					TreeType* b = typecheck_expression(P, tree->bval->right);
+					CHKFLAG(b);
 					/* in bitwise operators, both operands must be integers (or pointers) */
 					if (
 						(strcmp(a->type_name, "int") && a->plevel == 0) 
@@ -1066,7 +1136,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 						parse_error(P, "the right operand of the '.' operator must be an identifier");
 					}
 					/* if the left side is an identifier, it must be a local */
-					const TreeType* type_struct; /* the struct being indexed */
+					TreeType* type_struct; /* the struct being indexed */
 					if (left->type == EXP_IDENTIFIER) {
 						TreeVariable* var = get_local(P, left->idval);
 						if (!var) {
@@ -1097,11 +1167,12 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			}
 			case EXP_IDENTIFIER: {
 				TreeVariable* var = get_local(P, tree->idval);
+				CHKFLAG(var->datatype);
 				if (!var) {
 					/* why is it searching for args from the wrong function?? */
 					parse_error(P, "undeclared identifier '%s'", tree->idval);	
 				}
-				return var->datatype;
+				return real_type(P, var->datatype);
 			}
 			case EXP_FUNC_CALL: {
 				FuncCall* call = tree->fcval;
@@ -1109,6 +1180,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				ExpNode* scan = call->argument;	
 				/* the function being called */
 				TreeFunction* func = call->func;
+				printf("CALLING FUNCTION %s\n", func->identifier);
 
 				unsigned int expected_params = func->nparams;
 
@@ -1136,12 +1208,50 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					}
 				}
 				/* set the current generic list */
+				TreeTypeList* gen = NULL;
 				if (call->generic_list) {
-					/* reset the generic list, old one should be saved by save_state() */
-					P->generic_set = NULL; 
-					/* this is the list of types the user is passing to the function */
-					TreeTypeList* at_generic = call->generic_list;
-					P->generic_set = call->generic_list;
+					/* lets look an an example cuz im confused af rn
+					 *
+					 * foo<T>: () -> void {
+					 *   ...
+					 * }
+					 *
+					 * bar<T>: () -> void {
+					 *   foo<T>(); --> DO NOT TYPECHECK YET, NO GENERIC SET
+					 *   ...
+					 * }
+					 *
+					 * bar<int>(); --> GENERIC SET = {int}, NOW TYPECHECK foo<T>
+					 *
+					 */
+					/* looking at the example above, if even one of the identifiers
+					 * in the generic list has a generic_index == -1, the type is
+					 * undetermined and the tall shouldn't be typechecked... */
+					for (TreeTypeList* i = call->generic_list; i; i = i->next) {
+						if (i->datatype->is_generic && !P->generic_set) {
+							/* if true, we don't yet know the type of the type argument... bail */
+
+							/* revert the earlier save */
+							revert_state(P);
+							typecheck_bail = 1;
+							return GENERIC_TYPE;
+						}
+					}
+					save_state(P);
+					for (TreeTypeList* i = call->generic_list; i; i = i->next) {
+						TreeTypeList* new = malloc(sizeof(TreeTypeList));
+						new->datatype = real_type(P, i->datatype);
+						new->next = NULL;
+						if (!gen) {
+							gen = new;
+						} else {
+							TreeTypeList* j;
+							for (j = gen; j->next; j = j->next);
+							j->next = new;
+						}
+					}
+					TreeTypeList* at_generic = gen;
+					P->generic_set = gen;
 					for (LiteralList* i = func->generics; i; i = i->next) {
 						if (!at_generic) {
 							parse_error(P, "too few type parameters for function '%s'", func->identifier);
@@ -1162,7 +1272,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 							 * foo<T>: (n: T) -> T = bar<T>(n);
 							 *
 							 */
-							save_state(P);
 							P->current_function = i;
 							typecheck_with_types(P, i);
 							revert_state(P);
@@ -1244,7 +1353,12 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					sides[0] = sides[0]->bval->left;
 					fparams = fparams->prev;
 				}
-				return func->return_type;
+				/* revert to the original generic_set, will be overwritten */
+				P->generic_set = gen;
+				TreeType* ret_type = real_type(P, func->return_type);
+				printf("RETURN %s %s\n", tostring_datatype(func->return_type), tostring_datatype(ret_type));
+				revert_state(P);
+				return ret_type;
 			}
 			
 	}
@@ -1860,11 +1974,13 @@ parse_expression(ParseState* P) {
 		}
 	}
 	
+	/*	
 	if (P->options->opt_level >= OPT_ONE) {	
 		while (optimize_arith_available(P, tree->node)) {
 			optimize_tree_arith(P, tree->node);
 		}
 	}
+	*/
 
 	/* there should only be one value in the stack... TODO check this */
 	return tree->node;
@@ -1997,7 +2113,7 @@ parse_datatype(ParseState* P) {
 	type->type_name = malloc(strlen(P->token->word) + 1);
 	strcpy(type->type_name, P->token->word);
 	/* make sure it's a type */
-	if (is_generic_type(P, P->token->word)) {
+	if (get_generic_index(P, P->token->word) != -1) {
 		type->is_generic = 1;
 	} if (!is_datatype(P, type->type_name)) {
 		parse_error(P, "unknown type name '%s'", type->type_name);
@@ -2029,6 +2145,7 @@ parse_statement(ParseState* P) {
 	TreeNode* node = new_node(P, NODE_STATEMENT);
 	node->stateval = parse_expression(P);
 	P->generic_set = NULL;
+	set_bail(0);
 	typecheck_expression(P, node->stateval);
 	return node;
 }
@@ -2100,7 +2217,7 @@ parse_function(ParseState* P) {
 			} else {
 				LiteralList* i;
 				/* make sure its not a duplicate */
-				if (is_generic_type(P, new->literal)) {
+				if (get_generic_index(P, new->literal) != -1) {
 					parse_error(P, "duplicate identifier in generic list, '%s'", new->literal);
 				}
 				/* make sure it's not an actual type */
@@ -2293,15 +2410,17 @@ parse_return(ParseState* P) {
 	node->type = NODE_RETURN;
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
 	node->stateval = parse_expression(P);
-	const TreeType* eval_ret = typecheck_expression(P, node->stateval);
+	TreeType* eval_ret = typecheck_expression(P, node->stateval);
 	TreeType* ret_type = P->current_function->funcval->return_type;
-	if (!exact_datatype(eval_ret, ret_type)) {
-		parse_error(
-			P, 
-			"return statement evaluates to type (%s), expected type (%s)",
-			tostring_datatype(eval_ret),
-			tostring_datatype(ret_type)
-		);
+	if (eval_ret != GENERIC_TYPE && ret_type != GENERIC_TYPE) { 
+		if (!exact_datatype(eval_ret, ret_type)) {
+			parse_error(
+				P, 
+				"return statement evaluates to type (%s), expected type (%s)",
+				tostring_datatype(eval_ret),
+				tostring_datatype(ret_type)
+			);
+		}
 	}
 	P->token = P->token->next;
 	append(P, node);
@@ -2418,6 +2537,7 @@ generate_tree(LexState* L, ParseOptions* options) {
 	P->current_function = NULL;
 	P->generic_set = NULL;
 	P->current_loop = NULL;
+	P->call_state = NULL;
 	P->to_append = NULL;
 	P->defined_types = malloc(sizeof(TreeTypeList));
 	P->defined_types->next = NULL;

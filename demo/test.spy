@@ -1,21 +1,12 @@
-Vector: struct {
-	x: float;
-	y: float;	
-};
-
-foo: (a: int, b: float) -> int = a + (int)b;
-bar: (a: int) -> int = a;
-baz<T>: (a: T) -> T = a;
+nested_call<T, U>:	(value: T) -> U = (U)value;
+cast<T, U>:			(value: T) -> U = nested_call<T, U>(value);
 
 main: () -> void {
 	
-	vec: Vector;
-	vec.x = 15.5;
-	vec.y = 42.0;	
+	value_a: float;
+	value_b: float;
 	
-	bar((int)vec.x);
-	foo((int)vec.x, vec.y);
-	baz<int>(10);
-		
+	value_a = cast<int, float>(10);	
+	value_b = cast<int, int>(10);
 }	
 

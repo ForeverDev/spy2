@@ -24,8 +24,8 @@ typedef struct TreeDecl TreeDecl;
 typedef struct TreeFunction TreeFunction;
 typedef struct TreeVariable TreeVariable;
 typedef struct TreeVariableList TreeVariableList;
-typedef struct TreeGenericSet TreeGenericSet;
 typedef struct LiteralList LiteralList;
+typedef struct CallState CallState;
 typedef enum TreeNodeType TreeNodeType;
 
 enum TreeNodeType {
@@ -93,11 +93,6 @@ struct FuncCall {
 	TreeFunction* func;
 	ExpNode* argument; /* entire arg list is one expression */
 	TreeTypeList* generic_list;
-};
-struct TreeGenericSet {
-	char* generic_id; /* generic identifier */
-	TreeType* datatype; /* corresponding datatype */
-	TreeGenericSet* next; /* just make this a list, no need for a super struct */
 };
 
 struct TreeIf {
@@ -199,6 +194,14 @@ struct ParseOptions {
 	} opt_level;
 };
 
+struct CallState {
+	TreeNode* block;
+	TreeNode* function;
+	TreeTypeList* generic_set;
+	CallState* next;
+	CallState* prev;
+};
+
 struct ParseState {
 	const char* filename;
 	unsigned int total_lines;
@@ -212,15 +215,11 @@ struct ParseState {
 	TreeNode* root_block;
 	ParseOptions* options;
 	TreeTypeList* generic_set;
-	const TreeType* type_integer;
-	const TreeType* type_float;
-	const TreeType* type_byte;
-	const TreeType* type_void;
-	struct SavedState {
-		TreeNode* block;
-		TreeNode* function;
-		TreeTypeList* generic_set;
-	} saved_state;
+	TreeType* type_integer;
+	TreeType* type_float;
+	TreeType* type_byte;
+	TreeType* type_void;
+	CallState* call_state;
 };
 
 ParseState* generate_tree(LexState*, ParseOptions*);
