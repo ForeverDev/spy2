@@ -2312,8 +2312,7 @@ parse_return(ParseState* P) {
 	if (!ret_type) {
 		ret_type = P->current_function->funcval->return_type;
 	}
-	//eval_ret = generic_from_id(P, eval_ret->type_name) ?: eval_ret;  
-	if (eval_ret != GENERIC_BAIL && !exact_datatype(eval_ret, ret_type)) {
+	if (!exact_datatype(eval_ret, ret_type)) {
 		parse_error(
 			P, 
 			"return statement evaluates to type (%s), expected type (%s)",
