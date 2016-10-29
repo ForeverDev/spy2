@@ -1180,7 +1180,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				ExpNode* scan = call->argument;	
 				/* the function being called */
 				TreeFunction* func = call->func;
-				printf("CALLING FUNCTION %s\n", func->identifier);
 
 				unsigned int expected_params = func->nparams;
 
@@ -1356,7 +1355,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				/* revert to the original generic_set, will be overwritten */
 				P->generic_set = gen;
 				TreeType* ret_type = real_type(P, func->return_type);
-				printf("RETURN %s %s\n", tostring_datatype(func->return_type), tostring_datatype(ret_type));
 				revert_state(P);
 				return ret_type;
 			}
