@@ -211,7 +211,7 @@ struct ParseState {
 	TreeNode* current_loop;
 	TreeNode* root_block;
 	ParseOptions* options;
-	TreeGenericSet* generic_set;
+	TreeTypeList* generic_set;
 	const TreeType* type_integer;
 	const TreeType* type_float;
 	const TreeType* type_byte;
@@ -219,7 +219,7 @@ struct ParseState {
 	struct SavedState {
 		TreeNode* block;
 		TreeNode* function;
-		TreeGenericSet* generic_set;
+		TreeTypeList* generic_set;
 	} saved_state;
 };
 

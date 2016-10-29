@@ -5,6 +5,7 @@ Vector: struct {
 
 foo: (a: int, b: float) -> int = a + (int)b;
 bar: (a: int) -> int = a;
+baz<T>: (a: T) -> T = a;
 
 main: () -> void {
 	
@@ -14,6 +15,7 @@ main: () -> void {
 	
 	bar((int)vec.x);
 	foo((int)vec.x, vec.y);
+	baz<int>(10);
 		
 }	
 

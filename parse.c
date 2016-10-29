@@ -840,10 +840,6 @@ get_function(ParseState* P, const char* identifier) {
 
 static TreeVariable*
 get_local(ParseState* P, const char* identifier) {
-	int is_generic = 0;
-	if (is_generic_type(P, identifier)) {
-		is_generic = 1;
-	}
 	for (TreeNode* i = P->current_block; i; i = i->parent) {
 		if (i->type == NODE_BLOCK) {
 			for (TreeVariableList* j = i->blockval->locals; j; j = j->next) {
@@ -902,26 +898,22 @@ revert_state(ParseState* P) {
 }
 
 /* helper function for typecheck_expression */
+/*
 static TreeType*
 generic_from_id(ParseState* P, const char* id) {
-	for (TreeGenericSet* i = P->generic_set; i; i = i->next) {
+	for (* i = P->generic_set; i; i = i->next) {
 		if (!strcmp(i->generic_id, id)) {
 			return i->datatype;
 		}
 	}
 	return NULL;
 }
+*/
 
 /* helper function for typecheck_expression */
 static void
 assert_proper_param(ParseState* P, const char* func_id, int at_param, 
 					const TreeType* expected, const TreeType* test) {
-	if (is_generic_type(P, expected->type_name)) {
-		expected = generic_from_id(P, expected->type_name);
-	}
-	if (is_generic_type(P, test->type_name)) {
-		test = generic_from_id(P, test->type_name);
-	}
 	if (!exact_datatype(expected, test)) {
 		parse_error(
 			P, 
@@ -935,12 +927,18 @@ assert_proper_param(ParseState* P, const char* func_id, int at_param,
 }
 
 /* helper function for typecheck_expression */
-/*
 static TreeType*
-real_type(ParseState* P, TreeType* type) {
-	
+real_type(ParseState* P, TreeType* datatype) {
+	if (!is_generic_type(P, datatype->type_name)) {
+		return datatype;
+	}
+	for (TreeTypeList* i = P->generic_set; i; i = i->next) {
+		if (!strcmp(i->datatype->type_name, datatype->type_name)) {
+			return datatype;
+		}
+	}
+	return NULL;
 }
-*/
 
 /* helper function for typecheck_expression */
 static void
@@ -962,11 +960,7 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 			break;
 		case NODE_RETURN: {
 			const TreeType* eval_ret = typecheck_expression(P, node->stateval);
-			TreeType* ret_type = generic_from_id(P, P->current_function->funcval->return_type->type_name);
-			if (!ret_type) {
-				ret_type = P->current_function->funcval->return_type;
-			}
-			eval_ret = generic_from_id(P, eval_ret->type_name) ?: eval_ret;  
+			TreeType* ret_type = P->current_function->funcval->return_type;
 			if (!exact_datatype(eval_ret, ret_type)) {
 				parse_error(
 					P, 
@@ -1143,22 +1137,14 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				}
 				/* set the current generic list */
 				if (call->generic_list) {
+					/* reset the generic list, old one should be saved by save_state() */
+					P->generic_set = NULL; 
 					/* this is the list of types the user is passing to the function */
 					TreeTypeList* at_generic = call->generic_list;
+					P->generic_set = call->generic_list;
 					for (LiteralList* i = func->generics; i; i = i->next) {
 						if (!at_generic) {
 							parse_error(P, "too few type parameters for function '%s'", func->identifier);
-						}
-						TreeGenericSet* gen = malloc(sizeof(TreeGenericSet));
-						gen->generic_id = i->literal;
-						gen->datatype = at_generic->datatype;
-						gen->next = NULL;
-						if (!P->generic_set) {
-							P->generic_set = gen;
-						} else {
-							TreeGenericSet* i;
-							for (i = P->generic_set; i->next; i = i->next);
-							i->next = gen;
 						}
 						at_generic = at_generic->next;
 					}
@@ -1174,7 +1160,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 							 *
 							 * bar<T>: (n: T) -> T = n;
 							 * foo<T>: (n: T) -> T = bar<T>(n);
-
+							 *
 							 */
 							save_state(P);
 							P->current_function = i;
@@ -2308,10 +2294,7 @@ parse_return(ParseState* P) {
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
 	node->stateval = parse_expression(P);
 	const TreeType* eval_ret = typecheck_expression(P, node->stateval);
-	TreeType* ret_type = generic_from_id(P, P->current_function->funcval->return_type->type_name);
-	if (!ret_type) {
-		ret_type = P->current_function->funcval->return_type;
-	}
+	TreeType* ret_type = P->current_function->funcval->return_type;
 	if (!exact_datatype(eval_ret, ret_type)) {
 		parse_error(
 			P, 
