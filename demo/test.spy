@@ -1,12 +1,10 @@
-nested_call<T, U>:	(value: T) -> U = (U)value;
-cast<T, U>:			(value: T) -> U = nested_call<T, U>(value);
+f: (n: int, m: float) -> int = 10;
 
 main: () -> void {
 	
 	value_a: float;
 	value_b: float;
-	
-	value_a = cast<int, float>(10);	
-	value_b = cast<int, int>(10);
+
+	value_a = (float)f<int, float>(10, 123.5);
 }	
 

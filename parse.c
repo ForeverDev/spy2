@@ -924,35 +924,12 @@ revert_state(ParseState* P) {
 	} else {
 		CallState* i;
 		for (i = P->call_state; i->next; i = i->next);
-		if (i->prev) {
-			i->prev->next = NULL;
-		}
+		i->prev->next = NULL;
 		pop = i;
 	}
 	P->current_block = pop->block;
 	P->current_function = pop->function;
 	P->generic_set = pop->generic_set;
-}
-
-/* helper function for typecheck_expression */
-static TreeType*
-real_type(ParseState* P, TreeType* datatype) {
-	if (datatype == GENERIC_TYPE) {
-		return GENERIC_TYPE;
-	}
-	int generic_index = get_generic_index(P, datatype->type_name);
-	if (!P->generic_set && generic_index != -1) {
-		return GENERIC_TYPE;	
-	}
-	if (generic_index == -1) {
-		return datatype;
-	}
-	TreeTypeList* i = P->generic_set;
-	for (int j = 0; j < generic_index; j++) {
-		i = i->next;
-	}
-	/* i now points to the correct datatype in the set */
-	return i->datatype;
 }
 
 /* helper function for typecheck_expression */
@@ -975,8 +952,12 @@ set_bail(int b) {
 static void
 assert_proper_param(ParseState* P, const char* func_id, int at_param, 
 					TreeType* expected, TreeType* test) {
-	expected = real_type(P, expected);
-	test = real_type(P, test);
+	for (TreeTypeList* i = P->generic_set; i; i = i->next) {
+		/* if there is an unknown item in the set, don't typecheck yet */
+		if (i->datatype == GENERIC_TYPE) {
+			return;
+		}
+	}
 	if (test == GENERIC_TYPE || expected == GENERIC_TYPE) {
 		set_bail(1);
 		return;
@@ -1013,7 +994,7 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 			break;
 		case NODE_RETURN: {
 			TreeType* eval_ret = typecheck_expression(P, node->stateval);
-			TreeType* ret_type = real_type(P, P->current_function->funcval->return_type);
+			TreeType* ret_type = P->current_function->funcval->return_type;
 			if (should_bail()) {
 				return;
 			}
@@ -1042,6 +1023,7 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 	}
 }
 
+
 /* no need for call to BAIL() because bail flag already set */
 #define CHKBAIL() if (should_bail()) return GENERIC_TYPE
 #define CHKFLAG(v) if (v == GENERIC_TYPE) {typecheck_bail = 1; return GENERIC_TYPE;}
@@ -1059,13 +1041,8 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			return P->type_byte;	
 		case EXP_CAST: { 
 			/* if it's a cast to a generic type, bail */
-			TreeType* cast = real_type(P, tree->cval->datatype);
 			typecheck_expression(P, tree->cval->operand);
-			/* dont chkflag cast until after the operand is typechecked...
-			 * this will make things like (T)(10.5 + 13) error correctly 
-			 * (assuming there are no implicit casts) */
-			CHKFLAG(cast);
-			CHKBAIL();
+			TreeType* cast = tree->cval->datatype;
 			/* TODO make sure it's a valid cast, e.g. an object
 			 * cannot be cast to an integer but it can be cast
 			 * to a pointer */
@@ -1087,9 +1064,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_MULBY:
 				case TOK_DIVBY: {
 					TreeType* a = typecheck_expression(P, tree->bval->left);
-					CHKFLAG(a);
 					TreeType* b = typecheck_expression(P, tree->bval->right);
-					CHKFLAG(b);
 					if (!exact_datatype(a, b)) {
 						parse_error(
 							P,
@@ -1111,9 +1086,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_ORBY:
 				case TOK_XORBY: {
 					TreeType* a = typecheck_expression(P, tree->bval->left);
-					CHKFLAG(a);
 					TreeType* b = typecheck_expression(P, tree->bval->right);
-					CHKFLAG(b);
 					/* in bitwise operators, both operands must be integers (or pointers) */
 					if (
 						(strcmp(a->type_name, "int") && a->plevel == 0) 
@@ -1167,12 +1140,11 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			}
 			case EXP_IDENTIFIER: {
 				TreeVariable* var = get_local(P, tree->idval);
-				CHKFLAG(var->datatype);
 				if (!var) {
 					/* why is it searching for args from the wrong function?? */
 					parse_error(P, "undeclared identifier '%s'", tree->idval);	
 				}
-				return real_type(P, var->datatype);
+				return var->datatype;
 			}
 			case EXP_FUNC_CALL: {
 				FuncCall* call = tree->fcval;
@@ -1198,87 +1170,25 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				while (fparams && fparams->next) {
 					fparams = fparams->next;
 				}
-				save_state(P);
-				for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
-					if (i->type != NODE_FUNCTION) continue;
-					if (!strcmp(i->funcval->identifier, func->identifier)) {
-						P->current_function = i;
-						break;
-					}
-				}
 				/* set the current generic list */
+				save_state(P);
 				TreeTypeList* gen = NULL;
-				if (call->generic_list) {
-					/* lets look an an example cuz im confused af rn
-					 *
-					 * foo<T>: () -> void {
-					 *   ...
-					 * }
-					 *
-					 * bar<T>: () -> void {
-					 *   foo<T>(); --> DO NOT TYPECHECK YET, NO GENERIC SET
-					 *   ...
-					 * }
-					 *
-					 * bar<int>(); --> GENERIC SET = {int}, NOW TYPECHECK foo<T>
-					 *
-					 */
-					/* looking at the example above, if even one of the identifiers
-					 * in the generic list has a generic_index == -1, the type is
-					 * undetermined and the tall shouldn't be typechecked... */
-					for (TreeTypeList* i = call->generic_list; i; i = i->next) {
-						if (i->datatype->is_generic && !P->generic_set) {
-							/* if true, we don't yet know the type of the type argument... bail */
-
-							/* revert the earlier save */
-							revert_state(P);
-							typecheck_bail = 1;
-							return GENERIC_TYPE;
-						}
-					}
-					save_state(P);
-					for (TreeTypeList* i = call->generic_list; i; i = i->next) {
-						TreeTypeList* new = malloc(sizeof(TreeTypeList));
-						new->datatype = real_type(P, i->datatype);
-						new->next = NULL;
-						if (!gen) {
-							gen = new;
-						} else {
-							TreeTypeList* j;
-							for (j = gen; j->next; j = j->next);
-							j->next = new;
-						}
-					}
-					TreeTypeList* at_generic = gen;
-					P->generic_set = gen;
-					for (LiteralList* i = func->generics; i; i = i->next) {
-						if (!at_generic) {
-							parse_error(P, "too few type parameters for function '%s'", func->identifier);
-						}
-						at_generic = at_generic->next;
-					}
-					if (at_generic) {
-						parse_error(P, "too many type parameters for function '%s'", func->identifier);
-					}
-					/* find the function and do a full typecheck */
-					for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
-						if (i->type != NODE_FUNCTION) continue;
-						if (!strcmp(i->funcval->identifier, func->identifier)) {
-							/* save and then revert the genetic_set so that
-							 * nested generic calls work, e.g.
-							 *
-							 * bar<T>: (n: T) -> T = n;
-							 * foo<T>: (n: T) -> T = bar<T>(n);
-							 *
-							 */
-							P->current_function = i;
-							typecheck_with_types(P, i);
-							revert_state(P);
-							break;
-						}
+				for (TreeTypeList* i = call->generic_list; i; i = i->next) {
+					TreeTypeList* new = malloc(sizeof(TreeTypeList));
+					new->datatype = i->datatype;
+					new->next = NULL;
+					if (!gen) {
+						gen = new;
+					} else {
+						TreeTypeList* j;
+						for (j = gen; j->next; j = j->next);
+						j->next = new;
 					}
 				}
+				TreeTypeList* at_generic = gen;
+				P->generic_set = gen;
 				if (!scan && expected_params == 0) {
+					revert_state(P);
 					return func->return_type;
 				} 
 				unsigned int at_param = expected_params;
@@ -1295,6 +1205,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				} else if (call->argument) {
 					given_params = 1;
 				}
+				printf("CALLING %s, STILL IN %s\n", func->identifier, P->current_function->funcval->identifier);
 				/* check that the user is passing the correct number of params */
 				if (given_params != expected_params) {
 					parse_error(
@@ -1352,9 +1263,64 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					sides[0] = sides[0]->bval->left;
 					fparams = fparams->prev;
 				}
+				if (call->generic_list) {
+					/* lets look an an example cuz im confused af rn
+					 *
+					 * foo<T>: () -> void {
+					 *   ...
+					 * }
+					 *
+					 * bar<T>: () -> void {
+					 *   foo<T>(); --> DO NOT TYPECHECK YET, NO GENERIC SET
+					 *   ...
+					 * }
+					 *
+					 * bar<int>(); --> GENERIC SET = {int}, NOW TYPECHECK foo<T>
+					 *
+					 */
+					/* looking at the example above, if even one of the identifiers
+					 * in the generic list has a generic_index == -1, the type is
+					 * undetermined and the call shouldn't be typechecked... */
+					for (TreeTypeList* i = call->generic_list; i; i = i->next) {
+						if (i->datatype->is_generic && !P->generic_set) {
+							/* if true, we don't yet know the type of the type argument... bail */
+
+							/* revert the earlier save */
+							typecheck_bail = 1;
+							return GENERIC_TYPE;
+						}
+					}
+					for (LiteralList* i = func->generics; i; i = i->next) {
+						if (!at_generic) {
+							parse_error(P, "too few type parameters for function '%s'", func->identifier);
+						}
+						at_generic = at_generic->next;
+					}
+					if (at_generic) {
+						parse_error(P, "too many type parameters for function '%s'", func->identifier);
+					}
+					/* find the function and do a full typecheck */
+					for (TreeNode* i = P->root_block->blockval->child; i; i = i->next) {
+						if (i->type != NODE_FUNCTION) continue;
+						if (!strcmp(i->funcval->identifier, func->identifier)) {
+							/* save and then revert the genetic_set so that
+							 * nested generic calls work, e.g.
+							 *
+							 * bar<T>: (n: T) -> T = n;
+							 * foo<T>: (n: T) -> T = bar<T>(n);
+							 *
+							 */
+							save_state(P);
+							P->current_function = i;
+							typecheck_with_types(P, i);
+							revert_state(P);
+							break;
+						}
+					}
+				}
 				/* revert to the original generic_set, will be overwritten */
 				P->generic_set = gen;
-				TreeType* ret_type = real_type(P, func->return_type);
+				TreeType* ret_type = func->return_type;
 				revert_state(P);
 				return ret_type;
 			}

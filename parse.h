@@ -51,6 +51,7 @@ struct TreeType {
 	unsigned int size; /* number of bytes needed to store */
 	uint16_t modifier;
 	int is_generic; /* if it's a generic type, the type is not yet known... */
+	int generic_index; /* the index in the function generic list */
 	TreeStruct* sval; /* NULL if it's not a struct */
 };
 
