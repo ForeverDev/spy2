@@ -1,10 +1,14 @@
-f: (n: int, m: float) -> int = 10;
+Vector2: struct {
+	x: float;
+	y: float;
+	magnitude: float;
+};
 
 main: () -> void {
 	
-	value_a: float;
-	value_b: float;
+	vec: Vector2;
+	y: byte^;
 
-	value_a = (float)f<int, float>(10, 123.5);
-}	
+	x := (byte^)vec.x;
 
+}

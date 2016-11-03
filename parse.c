@@ -40,6 +40,7 @@ static int matches_function(ParseState*);
 static int matches_function_call(ParseState*);
 static int matches_struct(ParseState*);
 static int matches_comment(ParseState*);
+static int matches_infer(ParseState*);
 
 /* parsing functions */
 static TreeType* parse_datatype(ParseState*);
@@ -56,6 +57,7 @@ static void parse_return(ParseState*);
 static void parse_break(ParseState*);
 static void parse_continue(ParseState*);
 static void parse_comment(ParseState*);
+static void parse_infer(ParseState*);
 
 /* expression stack functions */
 static void expstack_push(ExpStack*, ExpNode*);
@@ -622,6 +624,15 @@ print_expression(ExpNode* tree, int indent) {
 }
 
 static int
+matches_infer(ParseState* P) {
+	Token* at = P->token;
+	if (!at || at->type != TOK_IDENTIFIER) return 0;
+	at = at->next;
+	if (!at || at->type != TOK_INFERASSIGN) return 0;
+	return 1;
+}
+
+static int
 matches_comment(ParseState* P) {
 	Token* at = P->token;
 	if (!at || at->type != TOK_FORSLASH) return 0;
@@ -948,6 +959,26 @@ set_bail(int b) {
 	typecheck_bail = b;
 }
 
+/* helper function for typecheck_expression...
+ * NOTE func is the function has the generic list */
+static TreeType*
+real_type(ParseState* P, TreeFunction* func, TreeType* type) {
+	if (!type->is_generic) return type;
+	int index = 0;
+	func = func ?: P->current_function->funcval; /* resort to current_function */
+	for (LiteralList* i = func->generics; i; i = i->next) {
+		if (!strcmp(i->literal, type->type_name)) {
+			TreeTypeList* j = P->generic_set;
+			for (int i = 0; i < index; i++) {
+				j = j->next;
+			}
+			return j->datatype;
+		}
+		index++;
+	}
+	return GENERIC_TYPE;
+}
+
 /* helper function for typecheck_expression */
 static void
 assert_proper_param(ParseState* P, const char* func_id, int at_param, 
@@ -993,8 +1024,8 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 			typecheck_expression(P, node->stateval);
 			break;
 		case NODE_RETURN: {
-			TreeType* eval_ret = typecheck_expression(P, node->stateval);
-			TreeType* ret_type = P->current_function->funcval->return_type;
+			TreeType* eval_ret = real_type(P, NULL, typecheck_expression(P, node->stateval));
+			TreeType* ret_type = real_type(P, NULL, P->current_function->funcval->return_type);
 			if (should_bail()) {
 				return;
 			}
@@ -1027,7 +1058,6 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 /* no need for call to BAIL() because bail flag already set */
 #define CHKBAIL() if (should_bail()) return GENERIC_TYPE
 #define CHKFLAG(v) if (v == GENERIC_TYPE) {typecheck_bail = 1; return GENERIC_TYPE;}
-
 
 /* completely validates an expression tree and returns its type */
 static TreeType*
@@ -1237,16 +1267,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 							typecheck_expression(P, sides[0])
 						);
 						break;
-						/*
-						assert_proper_param(
-							P,
-							func->identifier,
-							at_param,
-							fparams->variable->datatype,
-							typecheck_expression(P, sides[1])
-						);
-						break;
-						*/
 					}
 					/* the current argument */
 					if (sides[1]) {
@@ -1281,6 +1301,9 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					/* looking at the example above, if even one of the identifiers
 					 * in the generic list has a generic_index == -1, the type is
 					 * undetermined and the call shouldn't be typechecked... */
+					if (!func->generics) {
+						parse_error(P, "function '%s' is not generic", func->identifier);
+					}
 					for (TreeTypeList* i = call->generic_list; i; i = i->next) {
 						if (i->datatype->is_generic && !P->generic_set) {
 							/* if true, we don't yet know the type of the type argument... bail */
@@ -2040,6 +2063,45 @@ parse_struct(ParseState* P) {
 	return str;
 }
 
+/* example:
+ *	x := 10;
+ *	y := 13.5
+ *
+ *	x: int;
+ *
+ *	x: int = 10;
+ *  x := 10;
+ */
+static void
+parse_infer(ParseState* P) {
+	Token* start = P->token;
+	TreeVariable* var = malloc(sizeof(TreeVariable));	
+	var->identifier = malloc(strlen(P->token->word) + 1);
+	strcpy(var->identifier, P->token->word);
+	if (get_local(P, var->identifier)) {
+		parse_error(P, "declaration of duplicate variable '%s'", var->identifier);
+	}
+	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
+	/* replace any found ':=' with '=' */
+	for (Token* i = P->token; i != P->end_mark; i = i->next) {
+		if (i->type == TOK_INFERASSIGN) {
+			i->type = TOK_ASSIGN;
+		}
+	}
+	P->token = P->token->next->next;	
+	ExpNode* exp = parse_expression(P);
+	/* TODO free expression */
+	var->datatype = malloc(sizeof(TreeType));
+	memcpy(var->datatype, typecheck_expression(P, exp), sizeof(TreeType));
+	register_local(P, var);	
+	/* now append the expression, but replace any found := with = */
+	TreeNode* node = new_node(P, NODE_STATEMENT);
+	P->token = start;
+	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
+	node->stateval = parse_expression(P);
+	append(P, node);
+}
+
 /*
  * <typename> ::= <identifier>
  * <datatype> ::= <modifier>* <typename> "^"*
@@ -2108,8 +2170,6 @@ static TreeNode*
 parse_statement(ParseState* P) {
 	TreeNode* node = new_node(P, NODE_STATEMENT);
 	node->stateval = parse_expression(P);
-	P->generic_set = NULL;
-	set_bail(0);
 	typecheck_expression(P, node->stateval);
 	return node;
 }
@@ -2571,6 +2631,9 @@ generate_tree(LexState* L, ParseOptions* options) {
 			continue;
 		} else if (matches_comment(P)) {
 			parse_comment(P);
+			continue;
+		} else if (matches_infer(P)) {
+			parse_infer(P);
 			continue;
 		}
 		switch (P->token->type) {

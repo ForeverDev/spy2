@@ -81,6 +81,7 @@ static char* token_map[] = {
 	[TOK_GE] = ">=",
 	[TOK_LE] = "<=",
 	[TOK_ARROW] = "->",
+	[TOK_INFERASSIGN] = ":=",
 	[TOK_IGNORE] = "?"
 };
 
@@ -266,7 +267,8 @@ generate_tokens(const char* filename) {
 				CHECK2("!=") ? 146 : 
 				CHECK2(">=") ? 147 :
 				CHECK2("<=") ? 148 : 
-				CHECK2("->") ? 149 : (unsigned int)*contents
+				CHECK2("->") ? 149 : 
+				CHECK2(":=") ? 150 : (unsigned int)*contents
 			);
 
 			if (type == (unsigned int)*contents) {
