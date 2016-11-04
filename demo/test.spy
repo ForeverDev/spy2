@@ -8,5 +8,10 @@ main: () -> void {
 	vec: Vector2;
 
 	x := (byte^)vec.x;
+	
+	thing: byte^;
+
+	thing = typename int;
+
 
 }

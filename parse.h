@@ -219,6 +219,7 @@ struct ParseState {
 	TreeType* type_integer;
 	TreeType* type_float;
 	TreeType* type_byte;
+	TreeType* type_string;
 	TreeType* type_void;
 	CallState* call_state;
 };

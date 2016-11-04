@@ -82,6 +82,7 @@ static char* token_map[] = {
 	[TOK_LE] = "<=",
 	[TOK_ARROW] = "->",
 	[TOK_INFERASSIGN] = ":=",
+	[TOK_TYPENAME] = "<typename>",
 	[TOK_IGNORE] = "?"
 };
 
@@ -219,6 +220,7 @@ generate_tokens(const char* filename) {
 				!strcmp(buf, "continue") ? TOK_CONTINUE : 
 				!strcmp(buf, "break") ? TOK_BREAK : 
 				!strcmp(buf, "for") ? TOK_FOR : 
+				!strcmp(buf, "typename") ? TOK_TYPENAME :
 				!strcmp(buf, "struct") ? TOK_STRUCT : 
 				!strcmp(buf, "cfunc") ? TOK_CFUNC : TOK_IDENTIFIER
 			));

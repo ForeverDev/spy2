@@ -83,6 +83,7 @@ enum TokenType {
 	TOK_LE = 148,
 	TOK_ARROW = 149,
 	TOK_INFERASSIGN = 150,
+	TOK_TYPENAME = 151,
 	TOK_IGNORE = 200
 };
 

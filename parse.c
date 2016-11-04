@@ -1078,6 +1078,14 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			 * to a pointer */
 			return cast;
 		}
+		case EXP_UNOP: {
+			TreeType* operand = typecheck_expression(P, tree->uval->operand);
+			switch (tree->uval->type) {
+				case TOK_TYPENAME:
+					return P->type_string;	
+			}
+			return operand;
+		}
 		case EXP_BINOP:
 			switch (tree->bval->type) {
 				case TOK_PLUS:
@@ -1753,6 +1761,7 @@ parse_expression(ParseState* P) {
 		[TOK_AMPERSAND]		= {10, ASSOC_RIGHT, OP_UNARY},
 		[TOK_UPCARROT]		= {10, ASSOC_RIGHT, OP_UNARY},
 		[TOK_EXCL]			= {10, ASSOC_RIGHT, OP_UNARY},
+		[TOK_TYPENAME]		= {10, ASSOC_RIGHT, OP_UNARY},
 		[TOK_CAST]			= {10, ASSOC_RIGHT, OP_UNARY},
 		[TOK_PERIOD]		= {11, ASSOC_LEFT, OP_BINARY},
 		[TOK_INC]			= {11, ASSOC_LEFT, OP_UNARY},
@@ -2596,6 +2605,15 @@ generate_tree(LexState* L, ParseOptions* options) {
 	type_byte->sval = NULL;
 	P->type_byte = type_byte;
 	register_datatype(P, type_byte);
+
+	/* establish primitive string */
+	TreeType* type_string = malloc(sizeof(TreeType));
+	type_string->type_name = "byte";
+	type_string->plevel = 1;
+	type_string->size = 1;
+	type_string->modifier = 0;
+	type_string->sval = NULL;
+	P->type_string = type_string;
 
 	/* establish void type */
 	TreeType* type_void = malloc(sizeof(TreeType));
