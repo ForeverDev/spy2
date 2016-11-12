@@ -86,6 +86,7 @@ static Token* peek(ParseState*, int);
 static TreeType* typecheck_expression(ParseState*, ExpNode*);
 static int exact_datatype(const TreeType*, const TreeType*);
 static char* tostring_datatype(const TreeType*);
+static TreeType* generic_from_id(ParseState*, const char*);
 
 struct OperatorInfo {
 	unsigned int pres;
@@ -959,6 +960,8 @@ set_bail(int b) {
 	typecheck_bail = b;
 }
 
+/* helper function for typecheck_expresstion */
+
 /* helper function for typecheck_expression...
  * NOTE func is the function has the generic list */
 static TreeType*
@@ -1024,8 +1027,8 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 			typecheck_expression(P, node->stateval);
 			break;
 		case NODE_RETURN: {
-			TreeType* eval_ret = real_type(P, NULL, typecheck_expression(P, node->stateval));
-			TreeType* ret_type = real_type(P, NULL, P->current_function->funcval->return_type);
+			TreeType* eval_ret = typecheck_expression(P, node->stateval);
+			TreeType* ret_type = P->current_function->funcval->return_type;
 			if (should_bail()) {
 				return;
 			}
@@ -2445,15 +2448,13 @@ parse_return(ParseState* P) {
 	node->stateval = parse_expression(P);
 	TreeType* eval_ret = typecheck_expression(P, node->stateval);
 	TreeType* ret_type = P->current_function->funcval->return_type;
-	if (eval_ret != GENERIC_TYPE && ret_type != GENERIC_TYPE) { 
-		if (!exact_datatype(eval_ret, ret_type)) {
-			parse_error(
-				P, 
-				"return statement evaluates to type (%s), expected type (%s)",
-				tostring_datatype(eval_ret),
-				tostring_datatype(ret_type)
-			);
-		}
+	if (!exact_datatype(eval_ret, ret_type)) {
+		parse_error(
+			P, 
+			"return statement evaluates to type (%s), expected type (%s)",
+			tostring_datatype(eval_ret),
+			tostring_datatype(ret_type)
+		);
 	}
 	P->token = P->token->next;
 	append(P, node);

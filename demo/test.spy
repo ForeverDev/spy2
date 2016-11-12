@@ -1,17 +1,8 @@
-Vector2: struct {
-	x: float;
-	y: float;
-};
+square: (n: int) -> int = n * n;
 
 main: () -> void {
 	
-	vec: Vector2;
-
-	x := (byte^)vec.x;
-	
-	thing: byte^;
-
-	thing = typename int;
+	n := square(10);	
 
 
 }
