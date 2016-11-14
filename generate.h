@@ -5,7 +5,6 @@
 
 typedef struct CompileState CompileState;
 typedef struct InstructionStack InstructionStack;
-typedef struct LiteralList LiteralList;
 typedef void (*writer)(CompileState*, const char*, ...);
 
 struct InstructionStack {
