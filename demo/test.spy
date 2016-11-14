@@ -1,8 +1,4 @@
-square: (n: int) -> int = n * n;
-
-main: () -> void {
-	
-	n := square(10);	
-
-
+factorial: (n: int) -> void {
+	if (13 + 16) { }
+	if (13 + 16) { }
 }

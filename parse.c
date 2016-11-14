@@ -1062,15 +1062,19 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
 #define CHKBAIL() if (should_bail()) return GENERIC_TYPE
 #define CHKFLAG(v) if (v == GENERIC_TYPE) {typecheck_bail = 1; return GENERIC_TYPE;}
 
-/* completely validates an expression tree and returns its type */
+/* completely validates an expression tree and returns its type, also sets
+ * the proper type to the ExpNode */
 static TreeType*
 typecheck_expression(ParseState* P, ExpNode* tree) {
 	switch (tree->type) {
 		case EXP_INTEGER:
+			tree->evaluated_type = P->type_integer;
 			return P->type_integer;
 		case EXP_FLOAT:
+			tree->evaluated_type = P->type_float;
 			return P->type_float;
 		case EXP_BYTE:
+			tree->evaluated_type = P->type_byte;
 			return P->type_byte;	
 		case EXP_CAST: { 
 			/* if it's a cast to a generic type, bail */
@@ -1079,6 +1083,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			/* TODO make sure it's a valid cast, e.g. an object
 			 * cannot be cast to an integer but it can be cast
 			 * to a pointer */
+			tree->evaluated_type = cast;
 			return cast;
 		}
 		case EXP_UNOP: {
@@ -1087,6 +1092,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_TYPENAME:
 					return P->type_string;	
 			}
+			tree->evaluated_type = operand;
 			return operand;
 		}
 		case EXP_BINOP:
@@ -1115,6 +1121,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 							tostring_datatype(b)
 						);
 					}
+					tree->evaluated_type = a;
 					/* both types are identical, just return a */
 					return a;
 				}
@@ -1141,6 +1148,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 							tostring_datatype(b)
 						);
 					}
+					tree->evaluated_type = a;
 					return a;
 				}
 				case TOK_PERIOD: {
@@ -1175,7 +1183,8 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					}
 					if (type_struct->plevel > 0) {
 						parse_error(P, "attempt to use the '.' operator on a pointer");
-					}		
+					}	
+					tree->evaluated_type = field->datatype;	
 					return field->datatype;
 				}
 			}
@@ -1185,6 +1194,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					/* why is it searching for args from the wrong function?? */
 					parse_error(P, "undeclared identifier '%s'", tree->idval);	
 				}
+				tree->evaluated_type = var->datatype;
 				return var->datatype;
 			}
 			case EXP_FUNC_CALL: {
@@ -1230,6 +1240,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				P->generic_set = gen;
 				if (!scan && expected_params == 0) {
 					revert_state(P);
+					tree->evaluated_type = func->return_type;
 					return func->return_type;
 				} 
 				unsigned int at_param = expected_params;
@@ -1356,6 +1367,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				P->generic_set = gen;
 				TreeType* ret_type = func->return_type;
 				revert_state(P);
+				tree->evaluated_type = ret_type;
 				return ret_type;
 			}
 			
@@ -2150,6 +2162,12 @@ parse_datatype(ParseState* P) {
 	/* on typename */
 	type->type_name = malloc(strlen(P->token->word) + 1);
 	strcpy(type->type_name, P->token->word);
+	/* assign to size accordingly if it's a primitive type */
+	if (!strcmp(type->type_name, "int")) {
+		type->size = 8;
+	} else if (!strcmp(type->type_name, "float")) {
+		type->size = 8;
+	}
 	/* make sure it's a type */
 	if (get_generic_index(P, P->token->word) != -1) {
 		type->is_generic = 1;
@@ -2495,6 +2513,7 @@ parse_if(ParseState* P) {
 	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR); 
 	/* parse the condition */
 	node->ifval->condition = parse_expression(P);
+	typecheck_expression(P, node->ifval->condition);
 	node->ifval->child = NULL;
 	P->token = P->token->next;
 	append(P, node);
@@ -2560,13 +2579,14 @@ parse_block(ParseState* P) {
 	append(P, node);	
 }
 
-ParseState*
+TreeNode*
 generate_tree(LexState* L, ParseOptions* options) {
 	ParseState* P = malloc(sizeof(ParseState));
 	P->filename = L->filename;
 	P->total_lines = L->total_lines;
 	P->options = options;
 	P->token = L->tokens;
+	P->current_offset = 0;
 	P->end_mark = NULL;	
 	P->current_function = NULL;
 	P->generic_set = NULL;
@@ -2712,5 +2732,5 @@ generate_tree(LexState* L, ParseOptions* options) {
 
 	print_node(P->root_block, 0);
 
-	return P;
+	return P->root_block;
 }	

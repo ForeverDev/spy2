@@ -152,6 +152,9 @@ struct ExpNode {
 	 * number literals, datatypes (e.g. cast) and variables
 	 */
 	ExpNode* parent;
+	/* the type that the node evaluates to, assigned in
+	 * typecheck_expression */
+	TreeType* evaluated_type;
 	/* side tells whether the node is on the left side or
 	 * the right side of the parent binary operator..
 	 *	1 = left
@@ -178,7 +181,7 @@ struct ExpNode {
 		spy_float fval;
 		spy_string sval; 
 		char* idval;
-		TreeType* tval; /* datatype (e.g. cast, template) */
+		TreeType* tval; /* datatype (e.g. cast, template, sizeof) */
 		UnaryOp* uval;
 		BinaryOp* bval;
 		TypeCast* cval;
@@ -206,6 +209,7 @@ struct CallState {
 struct ParseState {
 	const char* filename;
 	unsigned int total_lines;
+	unsigned int current_offset;
 	Token* token;
 	Token* end_mark; /* marks the end of an expression */ 
 	TreeTypeList* defined_types;
@@ -224,6 +228,6 @@ struct ParseState {
 	CallState* call_state;
 };
 
-ParseState* generate_tree(LexState*, ParseOptions*);
+TreeNode* generate_tree(LexState*, ParseOptions*);
 
 #endif
