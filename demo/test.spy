@@ -5,5 +5,7 @@ Vector2: struct {
 };
 
 factorial: (n: int) -> void {
-	x := (int)13.3;
+	x: int;
+
+	x = (int)13.3;
 }

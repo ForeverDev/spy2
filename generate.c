@@ -206,10 +206,9 @@ generate_expression(CompileState* C, ExpNode* expression) {
 			ins = &arith_instructions[expression->uval->type];
 			break;
 	}
-	if (ins && ins->has_prefix && expression->evaluated_type) {
+	if (ins && ins->has_prefix) {
 		/* all types that are not float use the prefix 'i', so just
 		 * set it to 'f' if the typename is float */
-		printf("%p\n", expression->evaluated_type);
 		if (strcmp(expression->evaluated_type->type_name, "float")) {
 			prefix = "i";
 		} else {
@@ -241,7 +240,6 @@ generate_expression(CompileState* C, ExpNode* expression) {
 		case EXP_CAST: {
 			TreeType* target = expression->cval->datatype;
 			TreeType* operand = expression->cval->operand->evaluated_type;
-			printf("??? %p ???\n", operand);
 			generate_expression(C, expression->cval->operand);
 			if (!strcmp(target->type_name, "float") && !strcmp(operand->type_name, "int")) {
 				/* convert int to float */	
