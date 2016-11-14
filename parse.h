@@ -62,6 +62,7 @@ struct TreeStruct {
 
 struct TreeVariable {
 	char* identifier;
+	unsigned int offset;
 	TreeType* datatype;	
 };
 
@@ -129,6 +130,7 @@ struct TreeFunction {
 	TreeVariableList* params;
 	TreeType* return_type;	
 	TreeNode* child;
+	unsigned int stack_space;
 };
 
 struct TreeNode {

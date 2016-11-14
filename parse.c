@@ -87,6 +87,7 @@ static TreeType* typecheck_expression(ParseState*, ExpNode*);
 static int exact_datatype(const TreeType*, const TreeType*);
 static char* tostring_datatype(const TreeType*);
 static TreeType* generic_from_id(ParseState*, const char*);
+static int get_type_size(ParseState*, TreeType*);
 
 struct OperatorInfo {
 	unsigned int pres;
@@ -381,9 +382,35 @@ register_datatype(ParseState* P, TreeType* type) {
 	list->next = new;
 }
 
+static int
+get_type_size(ParseState* P, TreeType* data) {
+	if (!strcmp(data->type_name, "int")) {
+		return 8;
+	}
+	if (!strcmp(data->type_name, "float")) {
+		return 8;
+	}
+	if (data->plevel > 0) {
+		return 8;
+	}
+	if (!strcmp(data->type_name, "byte")) {
+		return 1;
+	}
+	/* if reached here, the type must be a struct... */
+	int size = 0;
+	for (TreeVariableList* i = data->sval->fields; i; i = i->next) {
+		size += get_type_size(P, i->variable->datatype);
+	}
+	return size;
+}
+
 static void
 register_local(ParseState* P, TreeVariable* var) {
 	TreeBlock* block = P->current_block->blockval;
+	/* if it's just a regular local, we can set the offset to the current
+	 * function's offset and increment by the variable's size */
+	var->offset = P->current_offset;
+	P->current_offset += get_type_size(P, var->datatype);
 	if (!block->locals) {
 		block->locals = malloc(sizeof(TreeVariableList));
 		block->locals->variable = var;
@@ -440,6 +467,7 @@ static void
 print_declaration(TreeVariable* var) {
 	printf("%s: ", var->identifier);
 	print_datatype(var->datatype);
+	printf(" (offset %d)", var->offset);
 }
 
 #define INDENT(n) for (int _=0; _<(n); _++) printf("    ")
@@ -2010,6 +2038,9 @@ jump_out(ParseState* P) {
 		/* get rid of current function on jump-out */
 		if (block->type == NODE_FUNCTION) {
 			P->current_function = NULL;
+			/* jumping out of a function, reset offset counter */
+			block->funcval->stack_space = P->current_offset;
+			P->current_offset = 0;
 		}
 		block = block->parent;
 	} while (block && block->type != NODE_BLOCK);
@@ -2238,6 +2269,8 @@ parse_function(ParseState* P) {
 			}
 		}
 	}
+	/* reset the offset counter... */
+	P->current_offset = 0;
 	/* expects to be on the function identifier */
 	TreeNode* node = malloc(sizeof(TreeNode));
 	node->type = NODE_FUNCTION;
@@ -2327,6 +2360,10 @@ parse_function(ParseState* P) {
 			list->variable = arg;
 			list->next = NULL;
 			list->prev = NULL;
+			/* the stack needs space to store the arguments (not just locals)...
+			 * increment the needed space */
+			arg->offset = P->current_offset;
+			P->current_offset += get_type_size(P, arg->datatype);
 			/* append the arg to list of params */
 			if (!node->funcval->params) {
 				node->funcval->params = list;

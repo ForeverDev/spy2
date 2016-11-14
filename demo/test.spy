@@ -1,4 +1,12 @@
+Vector2: struct {
+	x: float;
+	y: float;
+	magnitude: float;
+};
+
 factorial: (n: int) -> void {
-	if (13 + 16) { }
-	if (13 + 16) { }
+	meme: Vector2;
+	swag: Vector2^;
+	woot: Vector2^;
+	foo := (Vector2^)100;
 }

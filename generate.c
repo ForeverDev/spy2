@@ -180,7 +180,7 @@ generate_function(CompileState* C) {
 	TreeFunction* func = C->at->funcval;
 	C->return_label = C->label_count++;
 	outb(C, FORMAT_FUNCTION_HEAD, func->identifier); /* write function label */
-	outb(C, "res %d\n", 16); /* reserve bytes for local vars */
+	outb(C, "res %d\n",	func->stack_space); /* reserve bytes for local vars */
 	pushb(C, FORMAT_LABEL_HEAD, C->return_label);
 	pushb(C, "iret\n"); /* return instruction */
 }
