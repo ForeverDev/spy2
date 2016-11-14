@@ -5,8 +5,5 @@ Vector2: struct {
 };
 
 factorial: (n: int) -> void {
-	meme: Vector2;
-	swag: Vector2^;
-	woot: Vector2^;
-	foo := (Vector2^)100;
+	x := (int)13.3;
 }

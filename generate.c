@@ -206,7 +206,7 @@ generate_expression(CompileState* C, ExpNode* expression) {
 			ins = &arith_instructions[expression->uval->type];
 			break;
 	}
-	if (ins && ins->has_prefix) {
+	if (ins && ins->has_prefix && expression->evaluated_type) {
 		/* all types that are not float use the prefix 'i', so just
 		 * set it to 'f' if the typename is float */
 		printf("%p\n", expression->evaluated_type);
@@ -236,6 +236,22 @@ generate_expression(CompileState* C, ExpNode* expression) {
 					break;
 			}
 			break;
+		case EXP_UNOP:
+			break;
+		case EXP_CAST: {
+			TreeType* target = expression->cval->datatype;
+			TreeType* operand = expression->cval->operand->evaluated_type;
+			printf("??? %p ???\n", operand);
+			generate_expression(C, expression->cval->operand);
+			if (!strcmp(target->type_name, "float") && !strcmp(operand->type_name, "int")) {
+				/* convert int to float */	
+				C->write(C, "itof 0\n");
+			} else if (!strcmp(target->type_name, "int") && !strcmp(operand->type_name, "float")) {
+				/* convert float to int */
+				C->write(C, "ftoi 0\n");
+			}
+			break;
+		}
 		case EXP_INTEGER:
 			C->write(C, "ipush %d\n", expression->ival);
 			break;
@@ -265,9 +281,11 @@ generate_bytecode(TreeNode* root, const char* outfile) {
 			case NODE_FUNCTION:
 				generate_function(C);
 				break;
+			case NODE_STATEMENT:
+				generate_expression(C, C->at->stateval);
+				break;
 			case NODE_FOR:
 			case NODE_WHILE:
-			case NODE_STATEMENT:
 			case NODE_BLOCK:
 			case NODE_RETURN:
 			case NODE_BREAK:

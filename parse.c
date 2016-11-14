@@ -1105,7 +1105,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			tree->evaluated_type = P->type_byte;
 			return P->type_byte;	
 		case EXP_CAST: { 
-			/* if it's a cast to a generic type, bail */
 			typecheck_expression(P, tree->cval->operand);
 			TreeType* cast = tree->cval->datatype;
 			/* TODO make sure it's a valid cast, e.g. an object
