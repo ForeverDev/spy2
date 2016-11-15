@@ -192,18 +192,39 @@ generate_if(CompileState* C) {
 
 /* passes assembly into the writer function specified by C->write....
  * NOTE: no typechecking needs to be done, that was done by the parser */
+static int is_lhs = 0;
+
 static void
 generate_expression(CompileState* C, ExpNode* expression) {
 	/* just assign ins here so that it doesn't need to be done in
 	 * the next set of cases... */
 	const VMInstruction* ins = NULL;
 	const char* prefix = "";
+
+	/* if it's an assignent, is_lhs will be true for the call to
+	 * the left side.  We only want to halt dereferencing for the
+	 * upmost operator.  for example:
+	 *
+	 * ^(^p + 13) = 16;
+	 *
+	 * the first '^' should not dereference, we want to write to
+	 * that location, however the '^' applied to 'p' SHOULD dereference
+	 *
+	 */
+	int dont_der = is_lhs;
+	is_lhs = 0;
+
 	switch (expression->type) {
 		case EXP_BINOP:
 			ins = &arith_instructions[expression->bval->type];
 			break;
 		case EXP_UNOP:
 			ins = &arith_instructions[expression->uval->type];
+			break;
+		case EXP_IDENTIFIER:
+			if (expression->evaluated_type->parent_var) {
+				prefix = !strcmp(expression->evaluated_type->type_name, "float") ? "f" : "i";
+			}
 			break;
 	}
 	if (ins && ins->has_prefix) {
@@ -217,25 +238,69 @@ generate_expression(CompileState* C, ExpNode* expression) {
 	}
 	/* now do the assembly writing */
 	switch (expression->type) {
-		case EXP_BINOP:
-			generate_expression(C, expression->bval->left);
-			generate_expression(C, expression->bval->right);
+		case EXP_IDENTIFIER: 
+			if (expression->evaluated_type->parent_var) {
+				/* if it has a corresponding parent var it is a local...
+				 * therefore it also has an offset */
+				TreeVariable* parent_var = expression->evaluated_type->parent_var;
+				
+				/* only load value if it's not lhs... */
+				if (dont_der) {
+					C->write(C, "lea %d\n", parent_var->offset/8);
+				} else {
+					C->write(C, "%slload %d\n", prefix, parent_var->offset/8);
+				}
+			}
+			break;	
+		case EXP_BINOP: {
+			ExpNode* lhs = expression->bval->left;
+			ExpNode* rhs = expression->bval->right;
 			switch (expression->bval->type) {
-				case TOK_PLUS:
-					C->write(C, "%sadd\n", prefix);
+				case TOK_ASSIGN:
+					/* get the memory address of the left hand side... */
+					is_lhs = 1; /* DONT DEREFERENCE IF THERE IS AN OPERATOR IMPLYING THAT */
+					generate_expression(C, lhs);
+					
+					is_lhs = 0; /* already 0, but might as well be explicit */
+					/* generate code for the right hand side... */
+					generate_expression(C, rhs);
+					
+					/* we can safely assume that the lhs of '=' is a memory address..
+					 * the parser made sure of this... */
+					C->write(C, "%ssave\n", prefix);	
 					break;
-				case TOK_HYPHON:
-					C->write(C, "%ssub\n", prefix);
-					break;
-				case TOK_ASTER:
-					C->write(C, "%smul\n", prefix);
-					break;
-				case TOK_FORSLASH:
-					C->write(C, "%sdiv\n", prefix);
+				default:
+					generate_expression(C, lhs);
+					generate_expression(C, rhs);
+					switch (expression->bval->type) {
+						case TOK_PLUS:
+							C->write(C, "%sadd\n", prefix);
+							break;
+						case TOK_HYPHON:
+							C->write(C, "%ssub\n", prefix);
+							break;
+						case TOK_ASTER:
+							C->write(C, "%smul\n", prefix);
+							break;
+						case TOK_FORSLASH:
+							C->write(C, "%sdiv\n", prefix);
+							break;
+					}
 					break;
 			}
 			break;
+		}
 		case EXP_UNOP:
+			generate_expression(C, expression->uval->operand);
+			switch (expression->uval->type) {
+				case TOK_UPCARROT:
+					/* don't dereference if dont_der is set */
+					if (dont_der) {
+						break;
+					}
+					C->write(C, "ider\n");
+					break;
+			}
 			break;
 		case EXP_CAST: {
 			TreeType* target = expression->cval->datatype;
@@ -254,6 +319,7 @@ generate_expression(CompileState* C, ExpNode* expression) {
 			C->write(C, "ipush %d\n", expression->ival);
 			break;
 		case EXP_FLOAT:
+			C->write(C, "fpush %f\n", expression->fval);
 			break;
 	}
 }

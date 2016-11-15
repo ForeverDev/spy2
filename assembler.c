@@ -198,7 +198,6 @@ Assembler_generateBytecodeFile(const char* in_file_name) {
 					}
 				}
 			}
-			printf("%s\n", A.tokens->next->word);
 			Assembler_die(&A, "unexpected identifier '%s'", A.tokens->word);
 			safe:;
 		}

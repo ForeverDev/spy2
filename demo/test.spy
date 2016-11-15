@@ -1,11 +1,6 @@
-Vector2: struct {
-	x: float;
-	y: float;
-	magnitude: float;
-};
-
-factorial: (n: int) -> void {
+main: () -> void {
+	
 	x: int;
+	x = 30;	
 
-	x = (int)13.3;
 }

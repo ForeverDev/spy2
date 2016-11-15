@@ -53,6 +53,7 @@ struct TreeType {
 	int is_generic; /* if it's a generic type, the type is not yet known... */
 	int generic_index; /* the index in the function generic list */
 	TreeStruct* sval; /* NULL if it's not a struct */
+	TreeVariable* parent_var; /* only if applicable */
 };
 
 struct TreeStruct {
@@ -231,5 +232,6 @@ struct ParseState {
 };
 
 TreeNode* generate_tree(LexState*, ParseOptions*);
+void      print_expression(ExpNode*, int); /* expose to generate.c */
 
 #endif

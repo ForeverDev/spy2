@@ -23,7 +23,6 @@ typedef struct ModifierInfo ModifierInfo;
 static void print_datatype(const TreeType*);
 static void print_declaration(TreeVariable*);
 static void print_node(TreeNode*, int);
-static void print_expression(ExpNode*, int);
 static void parse_error(ParseState*, const char*, ...); 
 static void parse_die(ParseState*, const char*, va_list);
 
@@ -610,7 +609,7 @@ print_node(TreeNode* node, int indent) {
 	}	
 }
 
-static void
+void
 print_expression(ExpNode* tree, int indent) {
 	if (!tree) return;
 	INDENT(indent);
@@ -1118,6 +1117,23 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			switch (tree->uval->type) {
 				case TOK_TYPENAME:
 					return P->type_string;	
+				case TOK_UPCARROT: { /* dereference */
+					if (operand->plevel == 0) {
+						parse_error(P, "attempt to dereference a non-pointer");
+					}
+					TreeType* old = operand;
+					operand = malloc(sizeof(TreeType));
+					memcpy(operand, old, sizeof(TreeType));
+					operand->plevel--;
+					break;
+				}
+				case TOK_AMPERSAND: {
+					TreeType* old = operand;
+					operand = malloc(sizeof(TreeType));
+					memcpy(operand, old, sizeof(TreeType));
+					operand->plevel++;
+					break;
+				}
 			}
 			tree->evaluated_type = operand;
 			return operand;
@@ -1148,7 +1164,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 							tostring_datatype(b)
 						);
 					}
-					tree->evaluated_type = a;
+					tree->evaluated_type = b;
 					/* both types are identical, just return a */
 					return a;
 				}
@@ -1218,7 +1234,6 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			case EXP_IDENTIFIER: {
 				TreeVariable* var = get_local(P, tree->idval);
 				if (!var) {
-					/* why is it searching for args from the wrong function?? */
 					parse_error(P, "undeclared identifier '%s'", tree->idval);	
 				}
 				tree->evaluated_type = var->datatype;
@@ -2153,6 +2168,7 @@ parse_infer(ParseState* P) {
 	P->token = start;
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
 	node->stateval = parse_expression(P);
+	typecheck_expression(P, node->stateval);
 	append(P, node);
 }
 
@@ -2170,6 +2186,7 @@ parse_datatype(ParseState* P) {
 	type->modifier = 0;
 	type->sval = NULL;
 	type->is_generic = 0;
+	type->parent_var = NULL; /* to be assigned in parse_declaration */
 
 	/* find modifiers */	
 	int found;
@@ -2245,6 +2262,7 @@ parse_declaration(ParseState* P) {
 	}
 	P->token = P->token->next->next;
 	decl->datatype = parse_datatype(P);
+	decl->datatype->parent_var = decl;
 	return decl;
 }
 

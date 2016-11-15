@@ -33,11 +33,6 @@ int main(int argc, char** argv) {
 			exit(1);
 		}
 
-		if (!correct_suffix(argv[2])) {
-			printf("expected Spyre source file\n");
-			exit(1);
-		}	
-		
 		size_t flen = strlen(argv[2]);
 		char* outfile = malloc(flen + 2);
 		strcpy(outfile, argv[2]);
@@ -49,6 +44,10 @@ int main(int argc, char** argv) {
 		} else if (!strncmp(argv[1], "r", 1)) {
 			Spy_execute(argv[2], flags, 1, args);
 		} else if (!strncmp(argv[1], "c", 1)) {
+			if (!correct_suffix(argv[2])) {
+				printf("expected Spyre source file\n");
+				exit(1);
+			}	
 			LexState* tokens = generate_tokens(argv[2]);	
 			TreeNode* tree = generate_tree(tokens, &options);
 			generate_bytecode(tree, outfile);
