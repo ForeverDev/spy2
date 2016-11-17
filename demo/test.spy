@@ -2,5 +2,9 @@ main: () -> void {
 	
 	x: int;
 	x = 30;	
+	
+	while (x + 16) {
+		x = 40;
+	}
 
 }

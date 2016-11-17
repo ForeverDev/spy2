@@ -2586,6 +2586,7 @@ parse_while(ParseState* P) {
 	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR); 
 	/* parse the condition */
 	node->whileval->condition = parse_expression(P);
+	typecheck_expression(P, node->whileval->condition);
 	node->whileval->child = NULL;
 	P->token = P->token->next;
 	P->current_loop = node;

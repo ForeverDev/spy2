@@ -6,6 +6,9 @@
 
 #define FORMAT_FUNCTION "__FUNC__%s"
 #define FORMAT_LABEL "__LABEL__%04d"
+#define FORMAT_JMP "jmp " FORMAT_LABEL "\n"
+#define FORMAT_JZ "jz " FORMAT_LABEL "\n"
+#define FORMAT_JNZ "jnz " FORMAT_LABEL "\n"
 
 #define FORMAT_FUNCTION_HEAD FORMAT_FUNCTION ":\n"
 #define FORMAT_LABEL_HEAD FORMAT_LABEL ":\n"
@@ -33,6 +36,7 @@ static void popb(CompileState*);
 static void generate_if(CompileState*);
 static void generate_function(CompileState*);
 static void generate_expression(CompileState*, ExpNode*);
+static void generate_while(CompileState*);
 
 /* misc function */
 static int advance(CompileState*);
@@ -187,7 +191,21 @@ generate_function(CompileState* C) {
 
 static void
 generate_if(CompileState* C) {
+	unsigned int false_label = C->label_count++;
 	generate_expression(C, C->at->ifval->condition);
+	outb(C, FORMAT_JZ, false_label);
+	pushb(C, FORMAT_LABEL_HEAD, false_label);
+}
+
+static void
+generate_while(CompileState* C) {
+	unsigned int cond_label = C->label_count++;
+	unsigned int finish_label = C->label_count++;
+	outb(C, FORMAT_LABEL_HEAD, cond_label);
+	generate_expression(C, C->at->whileval->condition);
+	outb(C, FORMAT_JZ, finish_label);
+	pushb(C, FORMAT_JMP, cond_label);
+	pushb(C, FORMAT_LABEL_HEAD, finish_label);
 }
 
 /* passes assembly into the writer function specified by C->write....
@@ -285,6 +303,21 @@ generate_expression(CompileState* C, ExpNode* expression) {
 						case TOK_FORSLASH:
 							C->write(C, "%sdiv\n", prefix);
 							break;
+						case TOK_GT:
+							C->write(C, "%sgt\n", prefix);
+							break;
+						case TOK_GE:
+							C->write(C, "%sge\n", prefix);
+							break;
+						case TOK_LT:
+							C->write(C, "%slt\n", prefix);
+							break;
+						case TOK_LE:
+							C->write(C, "%sle\n", prefix);
+							break;
+						case TOK_EQ:
+							C->write(C, "%scmp\n", prefix);
+							break;
 					}
 					break;
 			}
@@ -337,6 +370,8 @@ generate_bytecode(TreeNode* root, const char* outfile) {
 		printf("couldn't open file '%s' for writing", outfile);
 	}
 
+	outb(C, "jmp __LABEL__ENTRY\n");
+
 	do {
 		switch (C->at->type) {
 			case NODE_IF:
@@ -348,8 +383,10 @@ generate_bytecode(TreeNode* root, const char* outfile) {
 			case NODE_STATEMENT:
 				generate_expression(C, C->at->stateval);
 				break;
-			case NODE_FOR:
 			case NODE_WHILE:
+				generate_while(C);
+				break;
+			case NODE_FOR:
 			case NODE_BLOCK:
 			case NODE_RETURN:
 			case NODE_BREAK:
@@ -357,6 +394,8 @@ generate_bytecode(TreeNode* root, const char* outfile) {
 				break;
 		}
 	} while (advance(C));
+
+	outb(C, "__LABEL__ENTRY:\ncall __FUNC__main\n");
 
 	fclose(C->handle);
 }
