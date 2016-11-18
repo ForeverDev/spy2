@@ -3,8 +3,8 @@ main: () -> void {
 	x: int;
 	x = 30;	
 	
-	while (x + 16) {
-		x = 40;
+	for (x = 2; x < 100; x = 3) {
+		x = 30;	
 	}
-
+	
 }

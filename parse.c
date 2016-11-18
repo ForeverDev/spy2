@@ -779,6 +779,7 @@ append(ParseState* P, TreeNode* node) {
 	node->next = NULL;
 	node->prev = NULL;
 	node->parent = NULL;
+	node->line = P->token ? P->token->line : 0;
 	if (P->to_append) {
 		switch (P->to_append->type) {
 			case NODE_IF:
@@ -901,29 +902,6 @@ get_local(ParseState* P, const char* identifier) {
 		if (!strcmp(i->variable->identifier, identifier)) {
 			return i->variable;
 		}
-	}
-	return NULL;
-}
-
-static const TreeType*
-tree_datatype(ParseState* P, ExpNode* tree) {
-	if (tree->type == EXP_BINOP) {
-		const TreeType* left = tree_datatype(P, tree->bval->left);
-		const TreeType* right = tree_datatype(P, tree->bval->right);
-	} else if (tree->type == EXP_UNOP) {
-		const TreeType* operand = tree_datatype(P, tree->uval->operand);
-	} else if (tree->type == EXP_IDENTIFIER) {
-		TreeVariable* var = get_local(P, tree->idval);	
-		if (!var) {
-			parse_error(P, "undeclared identifier '%s'", tree->idval);
-		}
-		return var->datatype;
-	} else if (tree->type == EXP_INTEGER) {
-		return P->type_integer;	 
-	} else if (tree->type == EXP_FLOAT) {
-		return P->type_float;
-	} else if (tree->type == EXP_BYTE) {
-		return P->type_byte;
 	}
 	return NULL;
 }
@@ -1093,6 +1071,9 @@ typecheck_with_types(ParseState* P, TreeNode* node) {
  * the proper type to the ExpNode */
 static TreeType*
 typecheck_expression(ParseState* P, ExpNode* tree) {
+	if (!tree) {
+		NULL;
+	}
 	switch (tree->type) {
 		case EXP_INTEGER:
 			tree->evaluated_type = P->type_integer;
@@ -1148,6 +1129,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 				case TOK_GE:
 				case TOK_LT:
 				case TOK_LE:
+				case TOK_EQ:
 				case TOK_ASSIGN:
 				case TOK_INCBY:
 				case TOK_DECBY:
@@ -1233,6 +1215,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			}
 			case EXP_IDENTIFIER: {
 				TreeVariable* var = get_local(P, tree->idval);
+				printf("CHECKING %s\n", tree->idval);
 				if (!var) {
 					parse_error(P, "undeclared identifier '%s'", tree->idval);	
 				}
@@ -2606,14 +2589,17 @@ parse_for(ParseState* P) {
 	/* initializer ends with a semicolon */
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
 	node->forval->initializer = parse_expression(P);
+	typecheck_expression(P, node->forval->initializer);
 	P->token = P->token->next;
 	/* condition ends with a semicolon */
 	mark_expression(P, TOK_NULL, TOK_SEMICOLON);
 	node->forval->condition = parse_expression(P);
+	typecheck_expression(P, node->forval->condition);
 	P->token = P->token->next;
 	/* statements ends with a closing parenthesis */
 	mark_expression(P, TOK_OPENPAR, TOK_CLOSEPAR);
 	node->forval->statement = parse_expression(P);	
+	typecheck_expression(P, node->forval->statement);
 	P->token = P->token->next;
 	P->current_loop = node;
 	append(P, node);

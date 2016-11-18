@@ -9,6 +9,7 @@
 #define FORMAT_JMP "jmp " FORMAT_LABEL "\n"
 #define FORMAT_JZ "jz " FORMAT_LABEL "\n"
 #define FORMAT_JNZ "jnz " FORMAT_LABEL "\n"
+#define FORMAT_COMMENT_NUM ";  %d\n"
 
 #define FORMAT_FUNCTION_HEAD FORMAT_FUNCTION ":\n"
 #define FORMAT_LABEL_HEAD FORMAT_LABEL ":\n"
@@ -37,6 +38,7 @@ static void generate_if(CompileState*);
 static void generate_function(CompileState*);
 static void generate_expression(CompileState*, ExpNode*);
 static void generate_while(CompileState*);
+static void generate_for(CompileState*);
 
 /* misc function */
 static int advance(CompileState*);
@@ -208,6 +210,21 @@ generate_while(CompileState* C) {
 	pushb(C, FORMAT_LABEL_HEAD, finish_label);
 }
 
+static void
+generate_for(CompileState* C){ 
+	unsigned int cond_label = C->label_count++;
+	unsigned int finish_label = C->label_count++;
+	generate_expression(C, C->at->forval->initializer);
+	outb(C, FORMAT_LABEL_HEAD, cond_label);
+	generate_expression(C, C->at->forval->condition);
+	outb(C, FORMAT_JZ, finish_label);
+	C->write = pushb; /* statement should be pushed */ 
+	generate_expression(C, C->at->forval->statement);
+	C->write = outb;
+	pushb(C, FORMAT_JMP, cond_label);
+	pushb(C, FORMAT_LABEL_HEAD, finish_label);
+}
+
 /* passes assembly into the writer function specified by C->write....
  * NOTE: no typechecking needs to be done, that was done by the parser */
 static int is_lhs = 0;
@@ -366,6 +383,7 @@ generate_bytecode(TreeNode* root, const char* outfile) {
 	C->handle = fopen(outfile, "wb");
 	C->label_count = 0;
 	C->return_label = 0;
+	C->ins_stack = NULL;
 	if (!C->handle) {
 		printf("couldn't open file '%s' for writing", outfile);
 	}
@@ -373,6 +391,7 @@ generate_bytecode(TreeNode* root, const char* outfile) {
 	outb(C, "jmp __LABEL__ENTRY\n");
 
 	do {
+		outb(C, FORMAT_COMMENT_NUM, C->at->line);
 		switch (C->at->type) {
 			case NODE_IF:
 				generate_if(C);
@@ -387,6 +406,8 @@ generate_bytecode(TreeNode* root, const char* outfile) {
 				generate_while(C);
 				break;
 			case NODE_FOR:
+				generate_for(C);
+				break;
 			case NODE_BLOCK:
 			case NODE_RETURN:
 			case NODE_BREAK:

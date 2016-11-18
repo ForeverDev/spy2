@@ -144,6 +144,7 @@ struct TreeNode {
 		TreeBlock* blockval;
 		TreeFunction* funcval;
 	};
+	unsigned int line;
 	TreeNode* next;
 	TreeNode* prev;
 	TreeNode* parent;
