@@ -140,6 +140,7 @@ Assembler_generateBytecodeFile(const char* in_file_name) {
 					A.tokens = A.tokens->next->next;
 					free(save->next);
 					free(save);
+					if (!A.tokens) break;
 					continue;
 				} else if (A.tokens->next->next) {
 					AssemblerToken* save = A.tokens;
@@ -147,6 +148,7 @@ Assembler_generateBytecodeFile(const char* in_file_name) {
 					A.tokens = A.tokens->next->next;
 					free(save->next);
 					free(save);
+					if (!A.tokens) break;
 					continue;
 				}
 			} else if (!strcmp_lower(A.tokens->word, "let")) {

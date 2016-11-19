@@ -1,10 +1,13 @@
-main: () -> void {
-	
+Foo : struct {
 	x: int;
-	x = 30;	
+	y: int;
+};
+
+main: () -> void {
+
+	a: Foo;
+	b: int;
 	
-	for (x = 2; x < 100; x = 3) {
-		x = 30;	
-	}
+	b = a.x;
 	
 }

@@ -304,6 +304,12 @@ generate_expression(CompileState* C, ExpNode* expression) {
 					 * the parser made sure of this... */
 					C->write(C, "%ssave\n", prefix);	
 					break;
+				case TOK_PERIOD: {
+					TreeVariable* left_var = lhs->evaluated_type->parent_var;	
+					/* find the proper field */
+					printf("SIZE IS %s %d\n", left_var->datatype->type_name, left_var->datatype->size);	
+					break;
+				}
 				default:
 					generate_expression(C, lhs);
 					generate_expression(C, rhs);
@@ -334,6 +340,9 @@ generate_expression(CompileState* C, ExpNode* expression) {
 							break;
 						case TOK_EQ:
 							C->write(C, "%scmp\n", prefix);
+							break;
+						case TOK_PERIOD:
+							printf("LOOOOL\n");
 							break;
 					}
 					break;
@@ -416,7 +425,7 @@ generate_bytecode(TreeNode* root, const char* outfile) {
 		}
 	} while (advance(C));
 
-	outb(C, "__LABEL__ENTRY:\ncall __FUNC__main\n");
+	outb(C, "__LABEL__ENTRY:\ncall __FUNC__main, 0\n");
 
 	fclose(C->handle);
 }

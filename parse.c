@@ -1196,6 +1196,7 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 					if (!type_struct || !type_struct->sval) {
 						parse_error(P, "attempt to use the '.' operator on something that isn't a struct");
 					}
+					left->evaluated_type = type_struct;
 					TreeVariable* field = NULL;
 					for (TreeVariableList* i = type_struct->sval->fields; i; i = i->next) {
 						if (!strcmp(i->variable->identifier, right->idval)) {
@@ -1215,9 +1216,9 @@ typecheck_expression(ParseState* P, ExpNode* tree) {
 			}
 			case EXP_IDENTIFIER: {
 				TreeVariable* var = get_local(P, tree->idval);
-				printf("CHECKING %s\n", tree->idval);
+				printf("PARENT VAR FOR %s %s\n", var->identifier, var->datatype->parent_var->identifier);
 				if (!var) {
-					parse_error(P, "undeclared identifier '%s'", tree->idval);	
+					parse_error(P, "undeclared identifier '%s'", tree->idval);
 				}
 				tree->evaluated_type = var->datatype;
 				return var->datatype;
@@ -2084,8 +2085,11 @@ parse_struct(ParseState* P) {
 	} else if (P->token->type == TOK_OPENCURL) {
 		P->token = P->token->next;
 		str->sval->initialized = 1;
+		int offset = 0;
 		while (P->token && P->token->type != TOK_CLOSECURL) {
 			TreeVariable* field = parse_declaration(P);
+			field->offset = offset;
+			offset += field->datatype->size;
 			make_sure(P, TOK_SEMICOLON, "token ';' expected to follow declaration");
 			/* append field to the fields list */
 			TreeVariableList* new = malloc(sizeof(TreeVariableList));
@@ -2102,6 +2106,7 @@ parse_struct(ParseState* P) {
 			}
 			P->token = P->token->next;
 		}
+		str->size = offset;
 		if (!P->token) {
 			parse_error(P, "unexpected EOF when parsing struct '%s'", str->type_name);
 		}
@@ -2145,6 +2150,7 @@ parse_infer(ParseState* P) {
 	/* TODO free expression */
 	var->datatype = malloc(sizeof(TreeType));
 	memcpy(var->datatype, typecheck_expression(P, exp), sizeof(TreeType));
+	var->datatype->parent_var = var;
 	register_local(P, var);	
 	/* now append the expression, but replace any found := with = */
 	TreeNode* node = new_node(P, NODE_STATEMENT);
